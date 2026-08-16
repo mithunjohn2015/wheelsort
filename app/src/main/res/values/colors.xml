@@ -1,0 +1,18 @@
+<resources>
+    <!-- Brand -->
+    <color name="brand_primary">#6C5CE7</color>
+    <color name="brand_primary_dark">#4834D4</color>
+    <color name="brand_secondary">#00CEC9</color>
+
+    <!-- Actions -->
+    <color name="action_keep">#00B894</color>
+    <color name="action_delete">#FF5E5E</color>
+
+    <!-- Surfaces -->
+    <color name="background_light">#FAF9FF</color>
+    <color name="background_dark">#121016</color>
+    <color name="surface_light">#FFFFFF</color>
+    <color name="surface_dark">#1E1B24</color>
+
+    <color name="ic_launcher_background">#4834D4</color>
+</resources>

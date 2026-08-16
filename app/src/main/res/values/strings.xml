@@ -1,0 +1,44 @@
+<resources>
+    <string name="app_name">WheelSort</string>
+
+    <string name="permission_title">Access your photos</string>
+    <string name="permission_body">WheelSort needs access to your photo library to let you review, sort, and clean it up.</string>
+    <string name="permission_grant">Grant access</string>
+    <string name="permission_denied">Photo access was denied. You can enable it from system settings.</string>
+    <string name="permission_open_settings">Open settings</string>
+
+    <string name="home_title">WheelSort</string>
+    <string name="home_subtitle">Swipe through your photos like a deck of cards</string>
+    <string name="home_all_photos">All Photos</string>
+    <string name="home_choose_album">Choose an album</string>
+    <string name="home_start">Start sorting</string>
+    <string name="home_trash">Trash</string>
+    <string name="home_stats">Stats</string>
+    <string name="home_photo_count">%1$d photos</string>
+
+    <string name="sort_keep">KEEP</string>
+    <string name="sort_delete">DELETE</string>
+    <string name="sort_progress">%1$d of %2$d</string>
+    <string name="sort_undo">Undo</string>
+    <string name="sort_complete_title">All done!</string>
+    <string name="sort_complete_body">You reviewed %1$d photos and freed up %2$s.</string>
+    <string name="sort_complete_back">Back to home</string>
+    <string name="sort_hint">Swipe up / down to browse \u2022 left to delete \u2022 right to keep</string>
+    <string name="sort_undo_snackbar">%1$s removed</string>
+
+    <string name="trash_title">Trash</string>
+    <string name="trash_empty">Trash is empty</string>
+    <string name="trash_restore">Restore</string>
+    <string name="trash_delete_forever">Delete forever</string>
+    <string name="trash_select_all">Select all</string>
+    <string name="trash_selected_count">%1$d selected</string>
+    <string name="trash_info">Trashed photos are kept by Android and auto-removed after a while. Restore or permanently delete anytime.</string>
+
+    <string name="stats_title">Stats</string>
+    <string name="stats_reviewed">Photos reviewed</string>
+    <string name="stats_kept">Kept</string>
+    <string name="stats_deleted">Sent to trash</string>
+    <string name="stats_space">Space freed</string>
+
+    <string name="action_settings">Settings</string>
+</resources>

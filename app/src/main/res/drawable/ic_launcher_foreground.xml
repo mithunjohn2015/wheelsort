@@ -1,0 +1,54 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- back card, fanned left -->
+    <group
+        android:pivotX="0"
+        android:pivotY="0"
+        android:rotation="-16"
+        android:translateX="46"
+        android:translateY="58">
+        <path
+            android:pathData="M -12,-23 L 12,-23 A 5,5 0 0 1 17,-18 L 17,18 A 5,5 0 0 1 12,23 L -12,23 A 5,5 0 0 1 -17,18 L -17,-18 A 5,5 0 0 1 -12,-23 Z"
+            android:fillColor="#E3DEFF" />
+        <path
+            android:pathData="M -17,-18 A 5,5 0 0 1 -12,-23 L -12,-23 L -17,-14 Z"
+            android:fillColor="#FF5E5E" />
+    </group>
+
+    <!-- front card, fanned right -->
+    <group
+        android:pivotX="0"
+        android:pivotY="0"
+        android:rotation="16"
+        android:translateX="62"
+        android:translateY="58">
+        <path
+            android:pathData="M -12,-23 L 12,-23 A 5,5 0 0 1 17,-18 L 17,18 A 5,5 0 0 1 12,23 L -12,23 A 5,5 0 0 1 -17,18 L -17,-18 A 5,5 0 0 1 -12,-23 Z"
+            android:fillColor="#EFECFF" />
+        <path
+            android:pathData="M 12,-23 A 5,5 0 0 1 17,-18 L 17,-14 L 12,-23 Z"
+            android:fillColor="#00CEC9" />
+    </group>
+
+    <!-- middle card, centered on top -->
+    <group
+        android:pivotX="0"
+        android:pivotY="0"
+        android:translateX="54"
+        android:translateY="54">
+        <path
+            android:pathData="M -14,-27 L 14,-27 A 6,6 0 0 1 20,-21 L 20,21 A 6,6 0 0 1 14,27 L -14,27 A 6,6 0 0 1 -20,21 L -20,-21 A 6,6 0 0 1 -14,-27 Z"
+            android:fillColor="#FFFFFF" />
+        <!-- simple mountain/sun photo glyph -->
+        <path
+            android:pathData="M -12,10 L -4,-2 L 3,7 L 8,0 L 16,10 Z"
+            android:fillColor="#6C5CE7" />
+        <path
+            android:pathData="M -6,-12 m -3,0 a 3,3 0 1,0 6,0 a 3,3 0 1,0 -6,0"
+            android:fillColor="#00CEC9" />
+    </group>
+</vector>
