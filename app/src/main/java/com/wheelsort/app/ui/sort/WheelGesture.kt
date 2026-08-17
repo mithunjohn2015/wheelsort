@@ -5,34 +5,42 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.input.pointer.util.addPointerInputChange
 import kotlin.math.abs
 
 private enum class DragAxis { UNDECIDED, HORIZONTAL, VERTICAL }
-private const val AXIS_LOCK_THRESHOLD_PX = 18f
+
+/** Small dead-zone before we commit to an axis - keeps taps and jitter from triggering anything. */
+private const val AXIS_LOCK_THRESHOLD_PX = 10f
 
 /**
- * A single gesture region that decides, per-drag, whether the user is:
- *  - turning the photo wheel (vertical drag -> [onVerticalSwipe]), or
- *  - making a keep/delete decision on the centered photo (horizontal drag).
+ * One gesture region that separates:
+ *  - vertical drags -> turning the wheel (continuous position + end velocity, for flinging)
+ *  - horizontal drags -> the keep/delete decision on the centered photo
  *
- * Only one axis is ever "live" per gesture, so the two behaviors never fight
- * over the same touch the way two independent detectors would.
+ * Axis is decided once per gesture (whichever direction moves first/more), so wheel-turning
+ * and keep/delete swipes never interfere with each other mid-gesture.
  */
 fun Modifier.wheelSortGesture(
     onHorizontalDrag: (deltaPx: Float) -> Unit,
-    onHorizontalDragEnd: () -> Unit,
+    onHorizontalDragEnd: (velocityPxPerSec: Float) -> Unit,
     onHorizontalDragCancel: () -> Unit,
-    onVerticalSwipe: (isUpward: Boolean) -> Unit
+    onVerticalDrag: (deltaPx: Float) -> Unit,
+    onVerticalDragEnd: (velocityPxPerSec: Float) -> Unit
 ): Modifier = pointerInput(Unit) {
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false)
         var axis = DragAxis.UNDECIDED
         var accumulatedDx = 0f
         var accumulatedDy = 0f
+        val velocityTracker = VelocityTracker()
+        velocityTracker.addPointerInputChange(down)
 
         while (true) {
             val event = awaitPointerEvent()
             val change = event.changes.firstOrNull { it.id == down.id } ?: break
+            velocityTracker.addPointerInputChange(change)
             if (!change.pressed) break
 
             val delta = change.positionChange()
@@ -43,7 +51,7 @@ fun Modifier.wheelSortGesture(
                     accumulatedDy += delta.y
                     if (abs(accumulatedDx) > AXIS_LOCK_THRESHOLD_PX || abs(accumulatedDy) > AXIS_LOCK_THRESHOLD_PX) {
                         axis = if (abs(accumulatedDx) > abs(accumulatedDy)) DragAxis.HORIZONTAL else DragAxis.VERTICAL
-                        if (axis == DragAxis.HORIZONTAL) onHorizontalDrag(accumulatedDx)
+                        if (axis == DragAxis.HORIZONTAL) onHorizontalDrag(accumulatedDx) else onVerticalDrag(accumulatedDy)
                     }
                     change.consume()
                 }
@@ -53,13 +61,15 @@ fun Modifier.wheelSortGesture(
                 }
                 DragAxis.VERTICAL -> {
                     change.consume()
+                    onVerticalDrag(delta.y)
                 }
             }
         }
 
+        val velocity = velocityTracker.calculateVelocity()
         when (axis) {
-            DragAxis.HORIZONTAL -> onHorizontalDragEnd()
-            DragAxis.VERTICAL -> onVerticalSwipe(accumulatedDy < 0f)
+            DragAxis.HORIZONTAL -> onHorizontalDragEnd(velocity.x)
+            DragAxis.VERTICAL -> onVerticalDragEnd(velocity.y)
             DragAxis.UNDECIDED -> onHorizontalDragCancel()
         }
     }

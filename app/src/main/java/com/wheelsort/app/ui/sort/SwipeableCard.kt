@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -20,18 +21,13 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.wheelsort.app.R
 import kotlin.math.roundToInt
 
-/**
- * Wraps [content] with Tinder-style horizontal swipe-to-decide behavior.
- * Vertical drags are intentionally NOT handled here - [WheelGesture] routes
- * those to wheel navigation instead, so this composable only reacts to
- * horizontal deltas fed to it externally via [dragState].
- */
+/** Live drag state for the centered card - external gesture code drives [offsetX] directly. */
 class SwipeCardDragState {
     var offsetX by mutableFloatStateOf(0f)
         internal set
@@ -48,9 +44,10 @@ fun SwipeableCard(
     modifier: Modifier = Modifier,
     content: @Composable BoxScope.() -> Unit
 ) {
-    val rotation = (dragState.offsetX / 42f).coerceIn(-14f, 14f)
-    val keepAlpha = (dragState.offsetX / (dragState.widthPx * 0.28f)).coerceIn(0f, 1f)
-    val deleteAlpha = (-dragState.offsetX / (dragState.widthPx * 0.28f)).coerceIn(0f, 1f)
+    val rotation = (dragState.offsetX / 38f).coerceIn(-16f, 16f)
+    val commitDistance = dragState.widthPx * SwipeTuning.COMMIT_DISTANCE_FRACTION
+    val keepAlpha = (dragState.offsetX / commitDistance).coerceIn(0f, 1f)
+    val deleteAlpha = (-dragState.offsetX / commitDistance).coerceIn(0f, 1f)
 
     Box(
         modifier = modifier
@@ -61,10 +58,9 @@ fun SwipeableCard(
     ) {
         content()
 
-        // KEEP badge (top-left), fades in while dragging right
         Text(
-            text = androidx.compose.ui.res.stringResource(R.string.sort_keep),
-            color = MaterialTheme.colorScheme.tertiary,
+            text = stringResource(R.string.sort_keep),
+            color = Color(0xFF00B894),
             style = MaterialTheme.typography.headlineMedium,
             modifier = Modifier
                 .align(Alignment.TopStart)
@@ -76,9 +72,8 @@ fun SwipeableCard(
                 .alpha(keepAlpha)
         )
 
-        // DELETE badge (top-right), fades in while dragging left
         Text(
-            text = androidx.compose.ui.res.stringResource(R.string.sort_delete),
+            text = stringResource(R.string.sort_delete),
             color = Color(0xFFFF5E5E),
             style = MaterialTheme.typography.headlineMedium,
             modifier = Modifier

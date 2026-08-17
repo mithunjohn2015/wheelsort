@@ -14,7 +14,8 @@ import kotlinx.coroutines.launch
 
 enum class SwipeAction { KEEP, DELETE }
 
-data class HistoryEntry(val photo: Photo, val action: SwipeAction)
+/** [flushed] = true once this delete has actually been sent to (and accepted by) MediaStore's trash. */
+data class HistoryEntry(val photo: Photo, val action: SwipeAction, val flushed: Boolean = true)
 
 data class SortUiState(
     val photos: List<Photo> = emptyList(),
@@ -23,10 +24,18 @@ data class SortUiState(
     val keptCount: Int = 0,
     val deletedCount: Int = 0,
     val spaceFreed: Long = 0,
+    val pendingDeleteCount: Int = 0,
     val isLoading: Boolean = true,
-    val sessionComplete: Boolean = false,
-    val lastToast: HistoryEntry? = null
+    val sessionComplete: Boolean = false
 )
+
+/**
+ * How many swipe-left decisions accumulate locally before we ask Android to actually
+ * trash them. Swiping left is instant and silent; the one system confirmation dialog
+ * only shows up roughly once per [BATCH_SIZE] deletes (or when you leave the screen),
+ * instead of once per photo.
+ */
+private const val BATCH_SIZE = 10
 
 class SortViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -35,6 +44,8 @@ class SortViewModel(application: Application) : AndroidViewModel(application) {
     val uiState: StateFlow<SortUiState> = _uiState.asStateFlow()
 
     private val history = ArrayDeque<HistoryEntry>()
+    private val pendingQueue = ArrayDeque<Photo>()
+    private var lastFlushBatch: List<Photo> = emptyList()
 
     fun loadPhotos(albumFilter: String?) {
         _uiState.value = _uiState.value.copy(isLoading = true)
@@ -48,17 +59,10 @@ class SortViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun currentPhoto(): Photo? = _uiState.value.photos.getOrNull(_uiState.value.currentIndex)
-    fun peekNextPhoto(): Photo? = _uiState.value.photos.getOrNull(_uiState.value.currentIndex + 1)
-    fun peekPreviousPhoto(): Photo? = _uiState.value.photos.getOrNull(_uiState.value.currentIndex - 1)
-
-    /** Builds the system trash confirmation intent for the given photo. Caller launches it. */
-    fun buildTrashIntent(photo: Photo): PendingIntent =
-        repository.createTrashRequest(listOf(photo.uri), trash = true)
-
-    /** Call once the system trash request succeeds (activity result RESULT_OK). */
-    fun onDeleteConfirmed(photo: Photo) {
-        history.addLast(HistoryEntry(photo, SwipeAction.DELETE))
+    /** Swipe left: instant, local-only. No system dialog. */
+    fun queueDelete(photo: Photo) {
+        history.addLast(HistoryEntry(photo, SwipeAction.DELETE, flushed = false))
+        pendingQueue.addLast(photo)
         val s = _uiState.value
         val nextIndex = s.currentIndex + 1
         _uiState.value = s.copy(
@@ -66,8 +70,8 @@ class SortViewModel(application: Application) : AndroidViewModel(application) {
             reviewedCount = s.reviewedCount + 1,
             deletedCount = s.deletedCount + 1,
             spaceFreed = s.spaceFreed + photo.size,
-            sessionComplete = nextIndex >= s.photos.size,
-            lastToast = HistoryEntry(photo, SwipeAction.DELETE)
+            pendingDeleteCount = pendingQueue.size,
+            sessionComplete = nextIndex >= s.photos.size
         )
     }
 
@@ -79,25 +83,22 @@ class SortViewModel(application: Application) : AndroidViewModel(application) {
             currentIndex = nextIndex,
             reviewedCount = s.reviewedCount + 1,
             keptCount = s.keptCount + 1,
-            sessionComplete = nextIndex >= s.photos.size,
-            lastToast = HistoryEntry(photo, SwipeAction.KEEP)
+            sessionComplete = nextIndex >= s.photos.size
         )
     }
 
-    fun goToNext() {
+    /** Jump forward/back by several photos at once (used for fast wheel flings). Clamped to bounds. */
+    fun goToDelta(steps: Int) {
         val s = _uiState.value
-        if (s.currentIndex < s.photos.size - 1) _uiState.value = s.copy(currentIndex = s.currentIndex + 1)
+        if (steps == 0 || s.photos.isEmpty()) return
+        val target = (s.currentIndex + steps).coerceIn(0, s.photos.size - 1)
+        _uiState.value = s.copy(currentIndex = target)
     }
 
-    fun goToPrevious() {
-        val s = _uiState.value
-        if (s.currentIndex > 0) _uiState.value = s.copy(currentIndex = s.currentIndex - 1)
-    }
+    fun goToNext() = goToDelta(1)
+    fun goToPrevious() = goToDelta(-1)
 
-    /**
-     * Undo the last keep/delete decision. If it was a delete, returns the photo so the
-     * caller can fire a restore trash-intent; otherwise just rewinds the counters.
-     */
+    /** Undo the last decision. */
     fun undoLast(): HistoryEntry? {
         val last = history.removeLastOrNull() ?: return null
         val s = _uiState.value
@@ -107,10 +108,41 @@ class SortViewModel(application: Application) : AndroidViewModel(application) {
             keptCount = if (last.action == SwipeAction.KEEP) (s.keptCount - 1).coerceAtLeast(0) else s.keptCount,
             deletedCount = if (last.action == SwipeAction.DELETE) (s.deletedCount - 1).coerceAtLeast(0) else s.deletedCount,
             spaceFreed = if (last.action == SwipeAction.DELETE) s.spaceFreed - last.photo.size else s.spaceFreed,
-            sessionComplete = false,
-            lastToast = null
+            sessionComplete = false
         )
+        if (last.action == SwipeAction.DELETE && !last.flushed) {
+            // Never actually sent to MediaStore - just drop it from the queue, no system call needed.
+            pendingQueue.remove(last.photo)
+            _uiState.value = _uiState.value.copy(pendingDeleteCount = pendingQueue.size)
+        }
         return last
+    }
+
+    /** True once enough deletes have queued up that we should flush automatically. */
+    fun shouldAutoFlush(): Boolean = pendingQueue.size >= BATCH_SIZE
+
+    /** Builds the one system confirmation for everything queued so far, or null if nothing to flush. */
+    fun buildFlushIntent(): PendingIntent? {
+        if (pendingQueue.isEmpty()) return null
+        lastFlushBatch = pendingQueue.toList()
+        return repository.createTrashRequest(lastFlushBatch.map { it.uri }, trash = true)
+    }
+
+    /** Call after the flush confirmation intent returns. */
+    fun onFlushResult(success: Boolean) {
+        if (success) {
+            pendingQueue.removeAll(lastFlushBatch)
+            // mark matching history entries as flushed so a future undo knows a real restore is needed
+            for (i in history.indices) {
+                val e = history.elementAt(i)
+                if (!e.flushed && e.action == SwipeAction.DELETE && lastFlushBatch.any { it.id == e.photo.id }) {
+                    history[i] = e.copy(flushed = true)
+                }
+            }
+        }
+        // if cancelled, items simply stay in pendingQueue and are retried on the next flush
+        _uiState.value = _uiState.value.copy(pendingDeleteCount = pendingQueue.size)
+        lastFlushBatch = emptyList()
     }
 
     fun buildRestoreIntent(photo: Photo): PendingIntent =
