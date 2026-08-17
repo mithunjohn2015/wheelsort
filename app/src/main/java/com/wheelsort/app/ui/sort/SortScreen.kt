@@ -1,9 +1,9 @@
 package com.wheelsort.app.ui.sort
 
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.VectorConverter
@@ -11,6 +11,7 @@ import androidx.compose.animation.core.calculateTargetValue
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.rememberSplineBasedDecay
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -22,16 +23,21 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.wheelsort.app.R
 import com.wheelsort.app.data.Photo
 import com.wheelsort.app.util.formatBytes
@@ -201,11 +207,13 @@ private fun SessionCompleteState(reviewed: Int, freedBytes: Long, onBack: () -> 
     }
 }
 
+/** How many slots above/below center are rendered - 2 either side + center = 5 photos visible. */
+private const val VISIBLE_RADIUS = 2
+
 /**
- * The actual "wheel": the centered photo renders large; photos above/below shrink and fade
- * the further they are from center, continuously, as you drag - and a fast vertical flick
- * spins through several photos at once using real release velocity (spline decay to pick
- * how far it should travel, then a velocity-seeded spring to settle).
+ * The wheel: five photos visible at once, tilted in 3D and shrinking/fading with distance
+ * from center like they're mounted on the inside of a drum rotating past the viewer. A fast
+ * vertical flick spins through several photos at once using real release velocity.
  */
 @Composable
 private fun WheelCarousel(
@@ -221,6 +229,7 @@ private fun WheelCarousel(
     val verticalOffset = remember { Animatable(0f) }
     var slotHeightPx by remember { mutableFloatStateOf(1f) }
     val decay = rememberSplineBasedDecay<Float>()
+    val density = LocalDensity.current
 
     // pointerInput(Unit) keeps the same gesture coroutine alive across recompositions, so
     // callbacks inside it must read state through this rather than closing over `photos` /
@@ -235,7 +244,7 @@ private fun WheelCarousel(
                     listOf(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.surface)
                 )
             )
-            .onGloballyPositioned { slotHeightPx = it.size.height * 0.58f }
+            .onGloballyPositioned { slotHeightPx = it.size.height * 0.30f }
             .wheelSortGesture(
                 onHorizontalDrag = { dx -> dragState.offsetX += dx },
                 onHorizontalDragEnd = { velocity ->
@@ -284,38 +293,62 @@ private fun WheelCarousel(
                         verticalOffset.snapTo(0f)
                     }
                 }
-            )
+            ),
+        contentAlignment = Alignment.Center
     ) {
+        // Decorative "drum" track behind the stack - reinforces the wheel/reel read.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(0.90f)
+                .fillMaxHeight(0.92f)
+                .clip(RoundedCornerShape(32.dp))
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                            Color.Transparent,
+                            Color.Transparent,
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                        )
+                    )
+                )
+                .border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f), RoundedCornerShape(32.dp))
+        )
+
         // Draw furthest-from-center first, centered card last, so the interactive center
-        // card is always on top of its shrinking neighbors.
-        for (slot in listOf(-2, 2, -1, 1, 0)) {
+        // card is always on top of its shrinking, tilted neighbors.
+        val drawOrder = (-VISIBLE_RADIUS..VISIBLE_RADIUS).sortedByDescending { abs(it) }
+        for (slot in drawOrder) {
             val i = currentIndex + slot
             val photo = photos.getOrNull(i) ?: continue
             val baseY = slot * slotHeightPx
             val yPx = baseY + verticalOffset.value
-            val distanceInSlots = abs(yPx) / slotHeightPx.coerceAtLeast(1f)
-            val scale = (1f - 0.32f * distanceInSlots).coerceIn(0.4f, 1f)
-            val itemAlpha = (1f - 0.6f * distanceInSlots).coerceIn(0.1f, 1f)
-            val isNearCenter = distanceInSlots < 0.5f
+            val signedDistance = yPx / slotHeightPx.coerceAtLeast(1f)
+            val distance = abs(signedDistance)
+            val scale = (1f - 0.20f * distance).coerceIn(0.6f, 1f)
+            val itemAlpha = (1f - 0.30f * distance).coerceIn(0.45f, 1f)
+            val tilt = (signedDistance * -24f).coerceIn(-48f, 48f)
+            val isNearCenter = distance < 0.5f
 
             Box(
                 modifier = Modifier
-                    .align(Alignment.Center)
-                    .fillMaxWidth(0.86f)
-                    .fillMaxHeight(0.6f)
+                    .fillMaxWidth(0.82f)
+                    .fillMaxHeight(0.34f)
                     .graphicsLayer {
                         translationY = yPx
                         scaleX = scale
                         scaleY = scale
                         alpha = itemAlpha
+                        rotationX = tilt
+                        cameraDistance = 10f * density.density
                     }
             ) {
                 if (isNearCenter) {
                     SwipeableCard(dragState = dragState, modifier = Modifier.fillMaxSize()) {
-                        PhotoCard(photo)
+                        PhotoCard(photo, highPriority = true)
                     }
                 } else {
-                    PhotoCard(photo)
+                    PhotoCard(photo, highPriority = false)
                 }
             }
         }
@@ -333,8 +366,16 @@ private fun WheelCarousel(
     }
 }
 
+/**
+ * [highPriority] photos (the centered card) decode at a larger target size; off-center photos
+ * only need to look right shrunk down, so they request a smaller bitmap - both are bounded well
+ * below the source photo's full resolution, which is what actually makes loading feel instant.
+ */
 @Composable
-private fun PhotoCard(photo: Photo) {
+private fun PhotoCard(photo: Photo, highPriority: Boolean) {
+    val context = LocalContext.current
+    val targetPx = if (highPriority) 1000 else 500
+
     Card(
         modifier = Modifier
             .fillMaxSize()
@@ -343,7 +384,11 @@ private fun PhotoCard(photo: Photo) {
         elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
     ) {
         AsyncImage(
-            model = photo.uri,
+            model = ImageRequest.Builder(context)
+                .data(photo.uri)
+                .size(targetPx)
+                .crossfade(150)
+                .build(),
             contentDescription = photo.displayName,
             modifier = Modifier.fillMaxSize(),
             contentScale = ContentScale.Crop

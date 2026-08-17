@@ -14,8 +14,18 @@ import kotlinx.coroutines.launch
 
 enum class SwipeAction { KEEP, DELETE }
 
-/** [flushed] = true once this delete has actually been sent to (and accepted by) MediaStore's trash. */
-data class HistoryEntry(val photo: Photo, val action: SwipeAction, val flushed: Boolean = true)
+/**
+ * [flushed] = true once this delete has actually been sent to (and accepted by) MediaStore's trash.
+ * [removedAtIndex] = list position the photo was removed from, so undo can splice it back exactly
+ * where it was. Only meaningful for DELETE entries, and only valid for the most recent one (undo
+ * only ever pops the top of the stack, so earlier indices are never invalidated by later actions).
+ */
+data class HistoryEntry(
+    val photo: Photo,
+    val action: SwipeAction,
+    val flushed: Boolean = true,
+    val removedAtIndex: Int = -1
+)
 
 data class SortUiState(
     val photos: List<Photo> = emptyList(),
@@ -59,22 +69,32 @@ class SortViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Swipe left: instant, local-only. No system dialog. */
+    /**
+     * Swipe left: instant, local-only, and the photo is actually removed from the browsing
+     * list right away - scrolling back up will never show it again or let you re-queue it.
+     */
     fun queueDelete(photo: Photo) {
-        history.addLast(HistoryEntry(photo, SwipeAction.DELETE, flushed = false))
-        pendingQueue.addLast(photo)
         val s = _uiState.value
-        val nextIndex = s.currentIndex + 1
+        val idx = s.photos.indexOfFirst { it.id == photo.id }
+        if (idx == -1) return
+
+        val newPhotos = s.photos.toMutableList().also { it.removeAt(idx) }
+        history.addLast(HistoryEntry(photo, SwipeAction.DELETE, flushed = false, removedAtIndex = idx))
+        pendingQueue.addLast(photo)
+
+        val newIndex = idx.coerceAtMost(newPhotos.size)
         _uiState.value = s.copy(
-            currentIndex = nextIndex,
+            photos = newPhotos,
+            currentIndex = newIndex,
             reviewedCount = s.reviewedCount + 1,
             deletedCount = s.deletedCount + 1,
             spaceFreed = s.spaceFreed + photo.size,
             pendingDeleteCount = pendingQueue.size,
-            sessionComplete = nextIndex >= s.photos.size
+            sessionComplete = newPhotos.isEmpty() || newIndex >= newPhotos.size
         )
     }
 
+    /** Swipe right: photo stays in the list, we just move the pointer forward past it. */
     fun onKeep(photo: Photo) {
         history.addLast(HistoryEntry(photo, SwipeAction.KEEP))
         val s = _uiState.value
@@ -102,18 +122,34 @@ class SortViewModel(application: Application) : AndroidViewModel(application) {
     fun undoLast(): HistoryEntry? {
         val last = history.removeLastOrNull() ?: return null
         val s = _uiState.value
-        _uiState.value = s.copy(
-            currentIndex = (s.currentIndex - 1).coerceAtLeast(0),
-            reviewedCount = (s.reviewedCount - 1).coerceAtLeast(0),
-            keptCount = if (last.action == SwipeAction.KEEP) (s.keptCount - 1).coerceAtLeast(0) else s.keptCount,
-            deletedCount = if (last.action == SwipeAction.DELETE) (s.deletedCount - 1).coerceAtLeast(0) else s.deletedCount,
-            spaceFreed = if (last.action == SwipeAction.DELETE) s.spaceFreed - last.photo.size else s.spaceFreed,
-            sessionComplete = false
-        )
-        if (last.action == SwipeAction.DELETE && !last.flushed) {
-            // Never actually sent to MediaStore - just drop it from the queue, no system call needed.
-            pendingQueue.remove(last.photo)
-            _uiState.value = _uiState.value.copy(pendingDeleteCount = pendingQueue.size)
+
+        when (last.action) {
+            SwipeAction.KEEP -> {
+                _uiState.value = s.copy(
+                    currentIndex = (s.currentIndex - 1).coerceAtLeast(0),
+                    reviewedCount = (s.reviewedCount - 1).coerceAtLeast(0),
+                    keptCount = (s.keptCount - 1).coerceAtLeast(0),
+                    sessionComplete = false
+                )
+            }
+            SwipeAction.DELETE -> {
+                // Splice the photo back into the list exactly where it was removed from.
+                val restoreIndex = last.removedAtIndex.coerceIn(0, s.photos.size)
+                val newPhotos = s.photos.toMutableList().apply { add(restoreIndex, last.photo) }
+                _uiState.value = s.copy(
+                    photos = newPhotos,
+                    currentIndex = restoreIndex,
+                    reviewedCount = (s.reviewedCount - 1).coerceAtLeast(0),
+                    deletedCount = (s.deletedCount - 1).coerceAtLeast(0),
+                    spaceFreed = s.spaceFreed - last.photo.size,
+                    sessionComplete = false
+                )
+                if (!last.flushed) {
+                    // Never actually sent to MediaStore - just drop it from the queue, no system call needed.
+                    pendingQueue.remove(last.photo)
+                    _uiState.value = _uiState.value.copy(pendingDeleteCount = pendingQueue.size)
+                }
+            }
         }
         return last
     }
@@ -132,7 +168,6 @@ class SortViewModel(application: Application) : AndroidViewModel(application) {
     fun onFlushResult(success: Boolean) {
         if (success) {
             pendingQueue.removeAll(lastFlushBatch)
-            // mark matching history entries as flushed so a future undo knows a real restore is needed
             for (i in history.indices) {
                 val e = history.elementAt(i)
                 if (!e.flushed && e.action == SwipeAction.DELETE && lastFlushBatch.any { it.id == e.photo.id }) {
