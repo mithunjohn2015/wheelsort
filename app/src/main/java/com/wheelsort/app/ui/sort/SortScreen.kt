@@ -6,6 +6,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.VectorConverter
+import androidx.compose.animation.core.calculateTargetValue
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.rememberSplineBasedDecay
 import androidx.compose.foundation.background
@@ -262,7 +264,9 @@ private fun WheelCarousel(
                     scope.launch {
                         val state = latestState.value
                         val slot = slotHeightPx.coerceAtLeast(1f)
-                        val decayTarget = decay.calculateTargetValue(verticalOffset.value, velocity)
+                        val decayTarget = decay.calculateTargetValue(
+                            Float.VectorConverter, verticalOffset.value, velocity
+                        )
                         var steps = (-decayTarget / slot).roundToInt()
                         val maxForward = (state.photos.size - 1 - state.currentIndex).coerceAtLeast(0)
                         val maxBackward = state.currentIndex.coerceAtLeast(0)
