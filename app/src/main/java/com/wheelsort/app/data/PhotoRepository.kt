@@ -33,22 +33,22 @@ class PhotoRepository(private val context: Context) {
         MediaStore.Images.Media.IS_FAVORITE
     )
 
-    fun queryActivePhotos(bucketName: String? = null): List<Photo> =
-        query(trashedOnly = false, bucketName = bucketName)
+    fun queryActivePhotos(bucketName: String? = null, newestFirst: Boolean = true): List<Photo> =
+        query(trashedOnly = false, bucketName = bucketName, newestFirst = newestFirst)
 
     fun queryTrashedPhotos(): List<Photo> =
-        query(trashedOnly = true, bucketName = null)
+        query(trashedOnly = true, bucketName = null, newestFirst = true)
 
     fun distinctAlbums(): List<String> =
         queryActivePhotos().mapNotNull { it.bucketName }.filter { it.isNotBlank() }.distinct().sorted()
 
-    private fun query(trashedOnly: Boolean, bucketName: String?): List<Photo> {
+    private fun query(trashedOnly: Boolean, bucketName: String?, newestFirst: Boolean): List<Photo> {
         val photos = mutableListOf<Photo>()
 
         val queryArgs = Bundle().apply {
             putString(
                 ContentResolver.QUERY_ARG_SQL_SORT_ORDER,
-                "${MediaStore.Images.Media.DATE_ADDED} DESC"
+                "${MediaStore.Images.Media.DATE_ADDED} ${if (newestFirst) "DESC" else "ASC"}"
             )
             if (bucketName != null) {
                 putString(

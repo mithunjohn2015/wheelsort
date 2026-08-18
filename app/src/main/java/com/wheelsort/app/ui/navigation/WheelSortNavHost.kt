@@ -15,13 +15,13 @@ import java.net.URLEncoder
 
 private object Routes {
     const val HOME = "home"
-    const val SORT = "sort?album={album}"
+    const val SORT = "sort?album={album}&newestFirst={newestFirst}"
     const val TRASH = "trash"
     const val STATS = "stats"
 
-    fun sort(album: String?): String {
+    fun sort(album: String?, newestFirst: Boolean): String {
         val encoded = URLEncoder.encode(album ?: "", "UTF-8")
-        return "sort?album=$encoded"
+        return "sort?album=$encoded&newestFirst=$newestFirst"
     }
 }
 
@@ -32,18 +32,27 @@ fun WheelSortNavHost() {
     NavHost(navController = navController, startDestination = Routes.HOME) {
         composable(Routes.HOME) {
             HomeScreen(
-                onStartSorting = { album -> navController.navigate(Routes.sort(album)) },
+                onStartSorting = { album, newestFirst -> navController.navigate(Routes.sort(album, newestFirst)) },
                 onOpenTrash = { navController.navigate(Routes.TRASH) },
                 onOpenStats = { navController.navigate(Routes.STATS) }
             )
         }
         composable(
             route = Routes.SORT,
-            arguments = listOf(navArgument("album") { type = NavType.StringType; defaultValue = "" })
+            arguments = listOf(
+                navArgument("album") { type = NavType.StringType; defaultValue = "" },
+                navArgument("newestFirst") { type = NavType.BoolType; defaultValue = true }
+            )
         ) { backStackEntry ->
             val raw = backStackEntry.arguments?.getString("album").orEmpty()
             val album = if (raw.isBlank()) null else URLDecoder.decode(raw, "UTF-8")
-            SortScreen(albumFilter = album, onExit = { navController.popBackStack() })
+            val newestFirst = backStackEntry.arguments?.getBoolean("newestFirst") ?: true
+            SortScreen(
+                albumFilter = album,
+                newestFirst = newestFirst,
+                onExit = { navController.popBackStack() },
+                onOpenTrash = { navController.navigate(Routes.TRASH) }
+            )
         }
         composable(Routes.TRASH) {
             TrashScreen(onExit = { navController.popBackStack() })

@@ -13,7 +13,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.wheelsort.app.ui.navigation.WheelSortNavHost
 import com.wheelsort.app.ui.permission.PermissionScreen
 import com.wheelsort.app.ui.theme.WheelSortTheme
@@ -37,11 +40,10 @@ private fun PermissionGate() {
     val context = androidx.compose.ui.platform.LocalContext.current
     val permission = remember { readImagesPermission() }
 
-    var hasPermission by remember {
-        mutableStateOf(
-            ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
-        )
-    }
+    fun currentlyGranted() =
+        ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+
+    var hasPermission by remember { mutableStateOf(currentlyGranted()) }
     var permanentlyDenied by remember { mutableStateOf(false) }
 
     val launcher = rememberLauncherForActivityResult(
@@ -52,6 +54,21 @@ private fun PermissionGate() {
             val activity = context as? ComponentActivity
             permanentlyDenied = activity?.shouldShowRequestPermissionRationale(permission) == false
         }
+    }
+
+    // Fixes "grant access from Settings, then have to restart the app": without this, coming
+    // back from Settings never re-checks the permission, so the app stays stuck on this screen
+    // even though access was actually granted.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                val granted = currentlyGranted()
+                if (granted != hasPermission) hasPermission = granted
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     if (hasPermission) {

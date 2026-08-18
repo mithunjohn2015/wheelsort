@@ -22,13 +22,14 @@ import kotlinx.coroutines.withContext
 
 @Composable
 fun HomeScreen(
-    onStartSorting: (albumFilter: String?) -> Unit,
+    onStartSorting: (albumFilter: String?, newestFirst: Boolean) -> Unit,
     onOpenTrash: () -> Unit,
     onOpenStats: () -> Unit
 ) {
     val context = LocalContext.current
     var albums by remember { mutableStateOf<List<String>>(emptyList()) }
     var selectedAlbum by remember { mutableStateOf<String?>(null) }
+    var newestFirst by remember { mutableStateOf(true) }
 
     LaunchedEffect(Unit) {
         albums = withContext(Dispatchers.IO) { PhotoRepository(context).distinctAlbums() }
@@ -52,7 +53,21 @@ fun HomeScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(20.dp))
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                SegmentedButton(
+                    selected = newestFirst,
+                    onClick = { newestFirst = true },
+                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
+                ) { Text("Newest first") }
+                SegmentedButton(
+                    selected = !newestFirst,
+                    onClick = { newestFirst = false },
+                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
+                ) { Text("Oldest first") }
+            }
+
+            Spacer(Modifier.height(20.dp))
             Text(stringResource(R.string.home_choose_album), style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(8.dp))
 
@@ -88,7 +103,7 @@ fun HomeScreen(
             }
             Spacer(Modifier.height(12.dp))
             Button(
-                onClick = { onStartSorting(selectedAlbum) },
+                onClick = { onStartSorting(selectedAlbum, newestFirst) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(52.dp)

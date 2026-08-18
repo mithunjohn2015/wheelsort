@@ -16,6 +16,7 @@ private const val AXIS_LOCK_THRESHOLD_PX = 10f
 
 /**
  * One gesture region that separates:
+ *  - a tap (negligible movement) -> [onTap], used to open the full-screen viewer
  *  - vertical drags -> turning the wheel (continuous position + end velocity, for flinging)
  *  - horizontal drags -> the keep/delete decision on the centered photo
  *
@@ -23,6 +24,7 @@ private const val AXIS_LOCK_THRESHOLD_PX = 10f
  * and keep/delete swipes never interfere with each other mid-gesture.
  */
 fun Modifier.wheelSortGesture(
+    onTap: () -> Unit,
     onHorizontalDrag: (deltaPx: Float) -> Unit,
     onHorizontalDragEnd: (velocityPxPerSec: Float) -> Unit,
     onHorizontalDragCancel: () -> Unit,
@@ -70,7 +72,10 @@ fun Modifier.wheelSortGesture(
         when (axis) {
             DragAxis.HORIZONTAL -> onHorizontalDragEnd(velocity.x)
             DragAxis.VERTICAL -> onVerticalDragEnd(velocity.y)
-            DragAxis.UNDECIDED -> onHorizontalDragCancel()
+            DragAxis.UNDECIDED -> {
+                onHorizontalDragCancel()
+                onTap()
+            }
         }
     }
 }

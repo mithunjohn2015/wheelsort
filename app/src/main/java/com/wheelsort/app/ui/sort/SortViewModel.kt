@@ -57,10 +57,10 @@ class SortViewModel(application: Application) : AndroidViewModel(application) {
     private val pendingQueue = ArrayDeque<Photo>()
     private var lastFlushBatch: List<Photo> = emptyList()
 
-    fun loadPhotos(albumFilter: String?) {
+    fun loadPhotos(albumFilter: String?, newestFirst: Boolean = true) {
         _uiState.value = _uiState.value.copy(isLoading = true)
         viewModelScope.launch(Dispatchers.IO) {
-            val photos = repository.queryActivePhotos(albumFilter)
+            val photos = repository.queryActivePhotos(albumFilter, newestFirst)
             _uiState.value = SortUiState(
                 photos = photos,
                 isLoading = false,
@@ -182,4 +182,7 @@ class SortViewModel(application: Application) : AndroidViewModel(application) {
 
     fun buildRestoreIntent(photo: Photo): PendingIntent =
         repository.createTrashRequest(listOf(photo.uri), trash = false)
+
+    fun buildFavoriteIntent(photo: Photo, favorite: Boolean): PendingIntent =
+        repository.createFavoriteRequest(listOf(photo.uri), favorite)
 }
