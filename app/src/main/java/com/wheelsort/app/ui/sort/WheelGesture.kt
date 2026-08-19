@@ -24,6 +24,7 @@ private const val AXIS_LOCK_THRESHOLD_PX = 10f
  * and keep/delete swipes never interfere with each other mid-gesture.
  */
 fun Modifier.wheelSortGesture(
+    onDown: (androidx.compose.ui.geometry.Offset) -> Unit = {},
     onTap: () -> Unit,
     onHorizontalDrag: (deltaPx: Float) -> Unit,
     onHorizontalDragEnd: (velocityPxPerSec: Float) -> Unit,
@@ -32,7 +33,8 @@ fun Modifier.wheelSortGesture(
     onVerticalDragEnd: (velocityPxPerSec: Float) -> Unit
 ): Modifier = pointerInput(Unit) {
     awaitEachGesture {
-        val down = awaitFirstDown(requireUnconsumed = false)
+        val down = awaitFirstDown(requireUnconsumed = true)
+        onDown(down.position)
         var axis = DragAxis.UNDECIDED
         var accumulatedDx = 0f
         var accumulatedDy = 0f

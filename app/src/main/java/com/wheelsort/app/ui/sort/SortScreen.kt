@@ -5,6 +5,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.animate
@@ -32,13 +33,16 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.lerp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
@@ -225,17 +229,36 @@ private fun SessionCompleteState(reviewed: Int, freedBytes: Long, onBack: () -> 
 }
 
 /** Slots rendered above/below center. Beyond ~3.5 slots the ring math fades them to invisible anyway. */
-private const val VISIBLE_RADIUS = 4
-private const val ANGLE_PER_SLOT_DEG = 24f
-private val KEEP_COLOR = Color(0xFF00B894)
-private val DELETE_COLOR = Color(0xFFFF5E5E)
+private const val VISIBLE_RADIUS = 3
+private const val ANGLE_PER_SLOT_DEG = 22f
+private const val PHOTO_REQUEST_PX = 760
+private val KEEP_COLOR = Color(0xFF00C896)
+private val DELETE_COLOR = Color(0xFFFF5C6C)
+private val NEUTRAL_SHADOW = Color.Black.copy(alpha = 0.32f)
+
+/** Smoothstep - cheap, and gives motion a gentler ease-out than a raw linear/cosine mapping. */
+private fun smooth(t: Float): Float {
+    val c = t.coerceIn(0f, 1f)
+    return c * c * (3f - 2f * c)
+}
+
+/** Vertical screen position (px, relative to wheel center) for a slot at [signedDistance]. */
+private fun wheelYPx(signedDistance: Float, radiusPx: Float): Float {
+    val angleRad = Math.toRadians((signedDistance * ANGLE_PER_SLOT_DEG).toDouble())
+    return (radiusPx * sin(angleRad)).toFloat()
+}
+
+/** How "face-on" a slot is (1 = dead center, 0 = edge-on/behind), before easing. */
+private fun wheelDepth(signedDistance: Float): Float {
+    val angleRad = Math.toRadians((signedDistance * ANGLE_PER_SLOT_DEG).toDouble())
+    return cos(angleRad).toFloat().coerceIn(0f, 1f)
+}
 
 /**
- * A real wheel: photos are positioned along a vertical circular arc (angle = distance-from-center
- * * a fixed step), so they curve away and shrink/fade continuously as they approach the edge -
- * exactly like looking at a rotating drum from the front - rather than a flat stack. A fast
- * vertical flick spins through several photos at once using real release velocity, and the whole
- * background tints green/red as you drag the centered photo left or right.
+ * A real wheel: photos sit along a vertical circular arc (angle = distance-from-center * a fixed
+ * step), curving away and shrinking/fading continuously toward the edges like a rotating drum
+ * viewed face-on. A fast vertical flick spins through several photos using real release velocity.
+ * The centered card glows green/red as you drag it, rather than flooding the whole screen with color.
  */
 @Composable
 private fun WheelCarousel(
@@ -252,6 +275,7 @@ private fun WheelCarousel(
     val currentIndex = uiState.currentIndex
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val haptics = LocalHapticFeedback.current
     val verticalOffset = remember { Animatable(0f) }
     var slotHeightPx by remember { mutableFloatStateOf(1f) }
     var containerHeightPx by remember { mutableFloatStateOf(1f) }
@@ -263,20 +287,27 @@ private fun WheelCarousel(
     // `currentIndex` directly - otherwise they'd stay frozen at their first-composition values.
     val latestState = rememberUpdatedState(uiState)
 
-    // Warm the image cache a few photos ahead in both directions so scrolling never waits on a
-    // fresh decode - this, plus the bounded request sizes in PhotoCard, is what removes the lag.
+    // Which photo is actually under the finger right now - resolved fresh on every touch-down
+    // by comparing the touch position against each visible slot's CURRENT on-screen position
+    // (mid-animation state included). This is what the swipe acts on, not just "whatever
+    // currentIndex happens to be" - fixes swiping the wrong photo when the wheel is still settling.
+    var activeSwipeSlot by remember { mutableIntStateOf(0) }
+
+    // Warm the cache a few photos ahead in both directions, at the EXACT same request size
+    // PhotoCard displays at - a mismatched preload size is a cache miss in disguise, which was
+    // the real reason scrolling still felt laggy even with preloading in place before.
     LaunchedEffect(currentIndex, photos) {
         val loader = context.imageLoader
         val range = (currentIndex - VISIBLE_RADIUS - 2)..(currentIndex + VISIBLE_RADIUS + 2)
         for (i in range) {
             val p = photos.getOrNull(i) ?: continue
-            loader.enqueue(ImageRequest.Builder(context).data(p.uri).size(600).build())
+            loader.enqueue(ImageRequest.Builder(context).data(p.uri).size(PHOTO_REQUEST_PX).build())
         }
     }
 
     val commitDist = dragState.widthPx * SwipeTuning.COMMIT_DISTANCE_FRACTION
-    val tintProgress = (abs(dragState.offsetX) / commitDist).coerceIn(0f, 1f)
-    val tintColor = if (dragState.offsetX >= 0) KEEP_COLOR else DELETE_COLOR
+    val dragProgress = (abs(dragState.offsetX) / commitDist).coerceIn(0f, 1f)
+    val dragDirectionColor = if (dragState.offsetX >= 0) KEEP_COLOR else DELETE_COLOR
 
     Box(
         modifier = Modifier
@@ -286,20 +317,37 @@ private fun WheelCarousel(
                     listOf(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.surface)
                 )
             )
-            .background(tintColor.copy(alpha = tintProgress * 0.4f))
+            // Subtle wash only - the real feedback is the glowing card below, not a flat color flood.
+            .background(dragDirectionColor.copy(alpha = dragProgress * 0.10f))
             .onGloballyPositioned {
                 containerHeightPx = it.size.height.toFloat()
                 slotHeightPx = it.size.height * 0.30f
             }
             .wheelSortGesture(
+                onDown = { position ->
+                    val state = latestState.value
+                    val slotPx = slotHeightPx.coerceAtLeast(1f)
+                    val radius = containerHeightPx * 0.66f
+                    val touchFromCenter = position.y - containerHeightPx / 2f
+                    var bestSlot = 0
+                    var bestDist = Float.MAX_VALUE
+                    for (candidate in -VISIBLE_RADIUS..VISIBLE_RADIUS) {
+                        if (state.photos.getOrNull(state.currentIndex + candidate) == null) continue
+                        val signedDistance = candidate + verticalOffset.value / slotPx
+                        val y = wheelYPx(signedDistance, radius)
+                        val d = abs(touchFromCenter - y)
+                        if (d < bestDist) { bestDist = d; bestSlot = candidate }
+                    }
+                    activeSwipeSlot = bestSlot
+                },
                 onTap = {
                     val state = latestState.value
-                    state.photos.getOrNull(state.currentIndex)?.let(onTapCenter)
+                    state.photos.getOrNull(state.currentIndex + activeSwipeSlot)?.let(onTapCenter)
                 },
                 onHorizontalDrag = { dx -> dragState.offsetX += dx },
                 onHorizontalDragEnd = { velocity ->
                     val state = latestState.value
-                    val photo = state.photos.getOrNull(state.currentIndex)
+                    val photo = state.photos.getOrNull(state.currentIndex + activeSwipeSlot)
                     if (photo != null) {
                         val dist = dragState.widthPx * SwipeTuning.COMMIT_DISTANCE_FRACTION
                         val right = dragState.offsetX > dist ||
@@ -308,21 +356,23 @@ private fun WheelCarousel(
                             (dragState.offsetX < 0f && velocity < -SwipeTuning.COMMIT_VELOCITY_PX_PER_SEC)
                         when {
                             right -> scope.launch {
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                                 animate(
                                     initialValue = dragState.offsetX,
                                     targetValue = dragState.widthPx * 1.4f,
                                     initialVelocity = velocity,
-                                    animationSpec = tween(220)
+                                    animationSpec = tween(190, easing = FastOutLinearInEasing)
                                 ) { value, _ -> dragState.offsetX = value }
                                 dragState.offsetX = 0f
                                 onCommitKeep(photo)
                             }
                             left -> scope.launch {
+                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                                 animate(
                                     initialValue = dragState.offsetX,
                                     targetValue = -dragState.widthPx * 1.4f,
                                     initialVelocity = velocity,
-                                    animationSpec = tween(220)
+                                    animationSpec = tween(190, easing = FastOutLinearInEasing)
                                 ) { value, _ -> dragState.offsetX = value }
                                 dragState.offsetX = 0f
                                 onCommitDelete(photo)
@@ -332,7 +382,7 @@ private fun WheelCarousel(
                                     initialValue = dragState.offsetX,
                                     targetValue = 0f,
                                     initialVelocity = velocity,
-                                    animationSpec = spring(Spring.DampingRatioMediumBouncy, Spring.StiffnessMedium)
+                                    animationSpec = spring(dampingRatio = 0.62f, stiffness = Spring.StiffnessMedium)
                                 ) { value, _ -> dragState.offsetX = value }
                             }
                         }
@@ -356,61 +406,65 @@ private fun WheelCarousel(
                         val maxBackward = state.currentIndex.coerceAtLeast(0)
                         steps = steps.coerceIn(-maxBackward, maxForward)
                         val settleTarget = -steps * slot
-                        // Heavier, springier feel (more "weight"/inertia) than a critically damped snap.
+                        // A touch of overshoot for weight/inertia, but controlled - not a bouncy-castle wobble.
                         verticalOffset.animateTo(
                             targetValue = settleTarget,
-                            animationSpec = spring(
-                                dampingRatio = Spring.DampingRatioLowBouncy,
-                                stiffness = Spring.StiffnessLow
-                            ),
+                            animationSpec = spring(dampingRatio = 0.72f, stiffness = Spring.StiffnessMediumLow),
                             initialVelocity = velocity
                         )
-                        if (steps != 0) onNavigateDelta(steps)
+                        if (steps != 0) {
+                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            onNavigateDelta(steps)
+                        }
                         verticalOffset.snapTo(0f)
                     }
                 }
             ),
         contentAlignment = Alignment.Center
     ) {
-        val radiusPx = containerHeightPx * 0.62f
-
-        // Draw furthest-from-center first, centered card last, so the interactive center
-        // card is always on top of its shrinking, tilted neighbors.
-        val drawOrder = (-VISIBLE_RADIUS..VISIBLE_RADIUS).sortedByDescending { abs(it) }
+        // Draw furthest-from-the-active-card first, active card last, so whichever photo is
+        // actually being swiped renders on top of its shrinking, tilted neighbors.
+        val drawOrder = (-VISIBLE_RADIUS..VISIBLE_RADIUS).sortedByDescending { abs(it - activeSwipeSlot) }
         for (slot in drawOrder) {
             val i = currentIndex + slot
             val photo = photos.getOrNull(i) ?: continue
-
-            val signedDistance = slot + verticalOffset.value / slotHeightPx.coerceAtLeast(1f)
-            val angleDeg = signedDistance * ANGLE_PER_SLOT_DEG
-            val angleRad = Math.toRadians(angleDeg.toDouble())
-            val yPx = (radiusPx * sin(angleRad)).toFloat()
-            val depth = cos(angleRad).toFloat().coerceAtLeast(0f)
-            if (depth < 0.02f) continue // fully edge-on - skip, it's invisible anyway
-
-            val scale = 0.34f + 0.66f * depth
-            val itemAlpha = depth.coerceIn(0f, 1f)
-            val isNearCenter = abs(signedDistance) < 0.5f
+            val isDraggable = slot == activeSwipeSlot
 
             Box(
                 modifier = Modifier
                     .fillMaxWidth(0.82f)
                     .fillMaxHeight(0.34f)
                     .graphicsLayer {
-                        translationY = yPx
-                        scaleX = scale
-                        scaleY = scale
-                        alpha = itemAlpha
-                        rotationX = angleDeg
-                        cameraDistance = 10f * density.density
+                        // Everything here reads live animated/drag state directly at draw-time,
+                        // so the wheel spinning does NOT trigger recomposition every frame - only
+                        // the render layer's transform updates, which is what makes this smooth.
+                        val signedDistance = slot + verticalOffset.value / slotHeightPx.coerceAtLeast(1f)
+                        val radius = containerHeightPx * 0.66f
+                        val y = wheelYPx(signedDistance, radius)
+                        val rawDepth = wheelDepth(signedDistance)
+                        val depth = smooth(rawDepth)
+                        val dragMag = (abs(dragState.offsetX) / dragState.widthPx.coerceAtLeast(1f)).coerceIn(0f, 1f)
+                        val dim = if (isDraggable) 1f else 1f - dragMag * 0.45f
+
+                        translationY = y
+                        scaleX = 0.5f + 0.5f * depth
+                        scaleY = 0.5f + 0.5f * depth
+                        alpha = depth * dim
+                        rotationX = signedDistance * ANGLE_PER_SLOT_DEG
+                        cameraDistance = 12f * density.density
                     }
             ) {
-                if (isNearCenter) {
+                if (isDraggable) {
                     SwipeableCard(dragState = dragState, modifier = Modifier.fillMaxSize()) {
-                        PhotoCard(photo, highPriority = true)
+                        PhotoCard(
+                            photo = photo,
+                            modifier = Modifier.fillMaxSize(),
+                            glowColor = if (dragProgress > 0.02f) dragDirectionColor else null,
+                            glowStrength = dragProgress
+                        )
                     }
                 } else {
-                    PhotoCard(photo, highPriority = false)
+                    PhotoCard(photo = photo, modifier = Modifier.fillMaxSize())
                 }
             }
         }
@@ -444,8 +498,8 @@ private fun TrashBinButton(pendingCount: Int, onClick: () -> Unit, modifier: Mod
             onClick = onClick,
             shape = CircleShape,
             color = MaterialTheme.colorScheme.surface,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-            shadowElevation = 6.dp,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+            shadowElevation = 4.dp,
             modifier = Modifier.size(52.dp)
         ) {
             Box(contentAlignment = Alignment.Center) {
@@ -477,28 +531,37 @@ private fun TrashBinButton(pendingCount: Int, onClick: () -> Unit, modifier: Mod
 }
 
 /**
- * [highPriority] photos (the centered card) decode at a larger target size; off-center photos
- * only need to look right shrunk down, so they request a smaller bitmap - both are bounded well
- * below the source photo's full resolution, and combined with the preload pass above and the
- * shared memory cache, this is what makes scrolling feel instant.
+ * Every photo requests the exact same bounded size ([PHOTO_REQUEST_PX]), matching what the
+ * preload pass above warms the cache with - a mismatched size here would silently defeat the
+ * preload (different size = different cache entry = cache miss). The centered card gets an
+ * optional colored glow shadow instead of a flat screen-wide tint.
  */
 @Composable
-private fun PhotoCard(photo: Photo, highPriority: Boolean) {
+private fun PhotoCard(
+    photo: Photo,
+    modifier: Modifier = Modifier,
+    glowColor: Color? = null,
+    glowStrength: Float = 0f
+) {
     val context = LocalContext.current
-    val targetPx = if (highPriority) 1000 else 500
+    val shadowColor = if (glowColor != null) glowColor.copy(alpha = 0.85f) else NEUTRAL_SHADOW
+    val elevation = lerp(8.dp, 26.dp, glowStrength.coerceIn(0f, 1f))
 
     Card(
-        modifier = Modifier
-            .fillMaxSize()
-            .shadow(8.dp, RoundedCornerShape(24.dp)),
+        modifier = modifier.shadow(
+            elevation = elevation,
+            shape = RoundedCornerShape(24.dp),
+            ambientColor = shadowColor,
+            spotColor = shadowColor
+        ),
         shape = RoundedCornerShape(24.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         AsyncImage(
             model = ImageRequest.Builder(context)
                 .data(photo.uri)
-                .size(targetPx)
-                .crossfade(150)
+                .size(PHOTO_REQUEST_PX)
+                .crossfade(120)
                 .build(),
             contentDescription = photo.displayName,
             modifier = Modifier.fillMaxSize(),

@@ -94,11 +94,14 @@ class SortViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
-    /** Swipe right: photo stays in the list, we just move the pointer forward past it. */
+    /** Swipe right: photo stays in the list, we advance the pointer to just past wherever it was. */
     fun onKeep(photo: Photo) {
-        history.addLast(HistoryEntry(photo, SwipeAction.KEEP))
         val s = _uiState.value
-        val nextIndex = s.currentIndex + 1
+        val idx = s.photos.indexOfFirst { it.id == photo.id }
+        if (idx == -1) return
+
+        history.addLast(HistoryEntry(photo, SwipeAction.KEEP))
+        val nextIndex = (idx + 1).coerceAtMost(s.photos.size)
         _uiState.value = s.copy(
             currentIndex = nextIndex,
             reviewedCount = s.reviewedCount + 1,
