@@ -33,6 +33,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.painter.ColorPainter
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -228,10 +229,10 @@ private fun SessionCompleteState(reviewed: Int, freedBytes: Long, onBack: () -> 
     }
 }
 
-/** Slots rendered above/below center. Beyond ~3.5 slots the ring math fades them to invisible anyway. */
-private const val VISIBLE_RADIUS = 3
-private const val ANGLE_PER_SLOT_DEG = 22f
-private const val PHOTO_REQUEST_PX = 760
+/** Only prev/current/next are rendered - simpler, calmer, and cuts decode load significantly. */
+private const val VISIBLE_RADIUS = 1
+private const val ANGLE_PER_SLOT_DEG = 52f
+private const val PHOTO_REQUEST_PX = 1080
 private val KEEP_COLOR = Color(0xFF00C896)
 private val DELETE_COLOR = Color(0xFFFF5C6C)
 private val NEUTRAL_SHADOW = Color.Black.copy(alpha = 0.32f)
@@ -298,7 +299,7 @@ private fun WheelCarousel(
     // the real reason scrolling still felt laggy even with preloading in place before.
     LaunchedEffect(currentIndex, photos) {
         val loader = context.imageLoader
-        val range = (currentIndex - VISIBLE_RADIUS - 2)..(currentIndex + VISIBLE_RADIUS + 2)
+        val range = (currentIndex - VISIBLE_RADIUS - 3)..(currentIndex + VISIBLE_RADIUS + 3)
         for (i in range) {
             val p = photos.getOrNull(i) ?: continue
             loader.enqueue(ImageRequest.Builder(context).data(p.uri).size(PHOTO_REQUEST_PX).build())
@@ -413,7 +414,6 @@ private fun WheelCarousel(
                             initialVelocity = velocity
                         )
                         if (steps != 0) {
-                            haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                             onNavigateDelta(steps)
                         }
                         verticalOffset.snapTo(0f)
@@ -565,7 +565,8 @@ private fun PhotoCard(
                 .build(),
             contentDescription = photo.displayName,
             modifier = Modifier.fillMaxSize(),
-            contentScale = ContentScale.Crop
+            contentScale = ContentScale.Crop,
+            placeholder = ColorPainter(MaterialTheme.colorScheme.surfaceVariant)
         )
     }
 }

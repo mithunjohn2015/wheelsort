@@ -18,6 +18,5 @@ class WheelSortApp : Application(), ImageLoaderFactory {
                 .build()
         }
         .crossfade(120)
-        .allowRgb565(true) // photos are display-only here, half the memory per bitmap is worth it
         .build()
 }

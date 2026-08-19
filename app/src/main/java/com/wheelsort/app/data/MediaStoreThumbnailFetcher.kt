@@ -1,6 +1,7 @@
 package com.wheelsort.app.data
 
 import android.content.Context
+import android.graphics.BitmapFactory
 import android.graphics.drawable.BitmapDrawable
 import android.net.Uri
 import android.util.Size as AndroidSize
@@ -28,12 +29,42 @@ class MediaStoreThumbnailFetcher(
 
     override suspend fun fetch(): FetchResult {
         val target = resolveTargetSize()
-        val bitmap = context.contentResolver.loadThumbnail(uri, target, null)
+        val bitmap = try {
+            context.contentResolver.loadThumbnail(uri, target, null)
+        } catch (_: Exception) {
+            // Some OEM MediaProvider implementations or unusual files can fail loadThumbnail -
+            // fall back to a manually downsampled decode instead of just failing the load.
+            decodeDownsampled(target) ?: throw IllegalStateException("Could not load $uri")
+        }
         return DrawableResult(
             drawable = BitmapDrawable(context.resources, bitmap),
             isSampled = true,
             dataSource = DataSource.DISK
         )
+    }
+
+    private fun decodeDownsampled(target: AndroidSize): android.graphics.Bitmap? {
+        return context.contentResolver.openInputStream(uri)?.use { input ->
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeStream(input, null, bounds)
+            val sample = calculateSampleSize(bounds.outWidth, bounds.outHeight, target.width, target.height)
+            context.contentResolver.openInputStream(uri)?.use { second ->
+                val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+                BitmapFactory.decodeStream(second, null, opts)
+            }
+        }
+    }
+
+    private fun calculateSampleSize(rawW: Int, rawH: Int, targetW: Int, targetH: Int): Int {
+        var sample = 1
+        var w = rawW
+        var h = rawH
+        while (w / 2 >= targetW && h / 2 >= targetH) {
+            sample *= 2
+            w /= 2
+            h /= 2
+        }
+        return sample
     }
 
     private fun resolveTargetSize(): AndroidSize {
