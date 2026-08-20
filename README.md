@@ -1,4 +1,8 @@
-# WheelSort
+# Photo Manager – Swipe Clean
+
+*(codenamed WheelSort internally - the Kotlin package name and internal class names still say
+"wheelsort", which is invisible to users. Only the display name shown on the phone/Play Store
+listing changed - see the note at the bottom of this file if you want to rename those too.)*
 
 A Tinder-style photo sorting app for Android, built with Kotlin + Jetpack Compose.
 
@@ -66,3 +70,15 @@ app/src/main/java/com/wheelsort/app/
 - The axis-lock gesture threshold (18px) and swipe-commit threshold (28% of card width) in `SortScreen.kt` / `WheelGesture.kt` are reasonable starting points — tune them to taste once you're swiping on your own phone.
 - On first delete/restore/permanent-delete, Android shows a system confirmation sheet — this is required by the OS and can't be skipped (it can be bypassed only for media the app itself created).
 - No cloud backend — everything reads/writes to the phone's own `MediaStore`. There's no separate "trash folder on disk" because Android 11+ handles that natively; this is the modern, scoped-storage-correct equivalent of what you described.
+
+## About the rename
+
+Only `app_name` in `strings.xml` (and a few other user-facing strings) changed — that's what
+controls what shows under the icon and in the Play Store listing. The Kotlin package
+(`com.wheelsort.app`), the `applicationId` in `app/build.gradle.kts`, and internal class names
+like `WheelSortApp`/`WheelSortTheme` were left alone on purpose: none of that is visible to users,
+and renaming a package touches every file's `package` declaration and import statement across the
+whole project for zero user-facing benefit. If you do eventually want the package renamed too
+(e.g. before a first Play Store release, since `applicationId` is hard to change after publishing),
+Android Studio's **Refactor → Rename** on the root package handles it safely in one operation.
+

@@ -75,7 +75,7 @@ fun TrashScreen(
                     }
                 )
                 if (uiState.selected.isNotEmpty()) {
-                    Surface(color = MaterialTheme.colorScheme.primaryContainer) {
+                    Surface(color = MaterialTheme.colorScheme.surfaceVariant) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()

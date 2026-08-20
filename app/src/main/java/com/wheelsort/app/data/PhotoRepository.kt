@@ -3,6 +3,7 @@ package com.wheelsort.app.data
 import android.app.PendingIntent
 import android.content.ContentResolver
 import android.content.ContentUris
+import android.content.ContentValues
 import android.content.Context
 import android.net.Uri
 import android.os.Bundle
@@ -17,6 +18,11 @@ import android.provider.MediaStore
  * hides it from the gallery, and keeps it recoverable until the user (or the
  * system, after ~30 days) permanently removes it. Restoring calls the same
  * API with trash = false. Permanent deletion uses [createDeleteRequest].
+ *
+ * Moving a photo into a dated folder works the same way: we don't touch files
+ * directly, we ask for write access via [createWriteRequest], then update the
+ * MediaStore row's RELATIVE_PATH via [moveToFolder] - the system physically
+ * relocates the file on disk to match.
  */
 class PhotoRepository(private val context: Context) {
 
@@ -26,6 +32,7 @@ class PhotoRepository(private val context: Context) {
         MediaStore.Images.Media._ID,
         MediaStore.Images.Media.DISPLAY_NAME,
         MediaStore.Images.Media.DATE_ADDED,
+        MediaStore.Images.Media.DATE_TAKEN,
         MediaStore.Images.Media.SIZE,
         MediaStore.Images.Media.BUCKET_DISPLAY_NAME,
         MediaStore.Images.Media.WIDTH,
@@ -67,6 +74,7 @@ class PhotoRepository(private val context: Context) {
             val idCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
             val nameCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
             val dateCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED)
+            val dateTakenCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN)
             val sizeCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.SIZE)
             val bucketCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
             val widthCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.WIDTH)
@@ -82,6 +90,7 @@ class PhotoRepository(private val context: Context) {
                         uri = uri,
                         displayName = cursor.getString(nameCol) ?: "",
                         dateAdded = cursor.getLong(dateCol) * 1000L,
+                        dateTaken = cursor.getLong(dateTakenCol),
                         size = cursor.getLong(sizeCol),
                         bucketName = cursor.getString(bucketCol),
                         width = cursor.getInt(widthCol),
@@ -103,4 +112,24 @@ class PhotoRepository(private val context: Context) {
 
     fun createFavoriteRequest(uris: List<Uri>, favorite: Boolean): PendingIntent =
         MediaStore.createFavoriteRequest(context.contentResolver, uris, favorite)
+
+    /** One-time consent to modify media this app doesn't own - required before [moveToFolder] will succeed. */
+    fun createWriteRequest(uris: List<Uri>): PendingIntent =
+        MediaStore.createWriteRequest(context.contentResolver, uris)
+
+    /**
+     * Physically relocates a photo into Pictures/[folderName]/ by updating its RELATIVE_PATH.
+     * Must be called after the corresponding [createWriteRequest] has been granted. Returns
+     * true on success.
+     */
+    fun moveToFolder(photo: Photo, folderName: String): Boolean {
+        return try {
+            val values = ContentValues().apply {
+                put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/$folderName/")
+            }
+            context.contentResolver.update(photo.uri, values, null, null) > 0
+        } catch (_: Exception) {
+            false
+        }
+    }
 }

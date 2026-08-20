@@ -12,6 +12,7 @@ data class Photo(
     val uri: Uri,
     val displayName: String,
     val dateAdded: Long,
+    val dateTaken: Long,
     val size: Long,
     val bucketName: String?,
     val width: Int,

@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.animation.core.Spring
@@ -12,10 +13,11 @@ import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.calculateTargetValue
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.rememberSplineBasedDecay
-import androidx.compose.foundation.BorderStroke
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -30,7 +32,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.painter.ColorPainter
@@ -57,6 +58,8 @@ import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
+
+private enum class SortPhase { LOADING, COMPLETE, WHEEL }
 
 @Composable
 fun SortScreen(
@@ -124,26 +127,37 @@ fun SortScreen(
             )
         }
     ) { padding ->
+        val phase = when {
+            uiState.isLoading -> SortPhase.LOADING
+            uiState.sessionComplete || uiState.photos.isEmpty() -> SortPhase.COMPLETE
+            else -> SortPhase.WHEEL
+        }
         Box(Modifier.fillMaxSize().padding(padding)) {
-            when {
-                uiState.isLoading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
+            AnimatedContent(
+                targetState = phase,
+                transitionSpec = { fadeIn(tween(280)) togetherWith fadeOut(tween(180)) },
+                label = "sortPhase"
+            ) { p ->
+                when (p) {
+                    SortPhase.LOADING -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
+                    }
+                    SortPhase.COMPLETE -> SessionCompleteState(
+                        reviewed = uiState.reviewedCount,
+                        freedBytes = uiState.spaceFreed,
+                        onBack = ::handleExit
+                    )
+                    SortPhase.WHEEL -> WheelCarousel(
+                        uiState = uiState,
+                        dragState = dragState,
+                        onCommitDelete = { photo -> viewModel.queueDelete(photo) },
+                        onCommitKeep = { photo -> viewModel.onKeep(photo) },
+                        onNavigateDelta = { steps -> viewModel.goToDelta(steps) },
+                        onTapCenter = { photo -> viewerPhoto = photo },
+                        onOpenTrash = onOpenTrash,
+                        pendingDeleteCount = uiState.pendingDeleteCount
+                    )
                 }
-                uiState.sessionComplete || uiState.photos.isEmpty() -> SessionCompleteState(
-                    reviewed = uiState.reviewedCount,
-                    freedBytes = uiState.spaceFreed,
-                    onBack = ::handleExit
-                )
-                else -> WheelCarousel(
-                    uiState = uiState,
-                    dragState = dragState,
-                    onCommitDelete = { photo -> viewModel.queueDelete(photo) },
-                    onCommitKeep = { photo -> viewModel.onKeep(photo) },
-                    onNavigateDelta = { steps -> viewModel.goToDelta(steps) },
-                    onTapCenter = { photo -> viewerPhoto = photo },
-                    onOpenTrash = onOpenTrash,
-                    pendingDeleteCount = uiState.pendingDeleteCount
-                )
             }
         }
     }
@@ -233,8 +247,8 @@ private fun SessionCompleteState(reviewed: Int, freedBytes: Long, onBack: () -> 
 private const val VISIBLE_RADIUS = 1
 private const val ANGLE_PER_SLOT_DEG = 52f
 private const val PHOTO_REQUEST_PX = 1080
-private val KEEP_COLOR = Color(0xFF00C896)
-private val DELETE_COLOR = Color(0xFFFF5C6C)
+private val KEEP_COLOR = com.wheelsort.app.ui.theme.ActionKeep
+private val DELETE_COLOR = com.wheelsort.app.ui.theme.ActionDelete
 private val NEUTRAL_SHADOW = Color.Black.copy(alpha = 0.32f)
 
 /** Smoothstep - cheap, and gives motion a gentler ease-out than a raw linear/cosine mapping. */
@@ -313,13 +327,9 @@ private fun WheelCarousel(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    listOf(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.colorScheme.surface)
-                )
-            )
+            .background(MaterialTheme.colorScheme.background)
             // Subtle wash only - the real feedback is the glowing card below, not a flat color flood.
-            .background(dragDirectionColor.copy(alpha = dragProgress * 0.10f))
+            .background(dragDirectionColor.copy(alpha = dragProgress * 0.08f))
             .onGloballyPositioned {
                 containerHeightPx = it.size.height.toFloat()
                 slotHeightPx = it.size.height * 0.30f
@@ -407,10 +417,10 @@ private fun WheelCarousel(
                         val maxBackward = state.currentIndex.coerceAtLeast(0)
                         steps = steps.coerceIn(-maxBackward, maxForward)
                         val settleTarget = -steps * slot
-                        // A touch of overshoot for weight/inertia, but controlled - not a bouncy-castle wobble.
+                        // A touch of overshoot for weight/inertia, but resolves quickly - precise, not floaty.
                         verticalOffset.animateTo(
                             targetValue = settleTarget,
-                            animationSpec = spring(dampingRatio = 0.72f, stiffness = Spring.StiffnessMediumLow),
+                            animationSpec = spring(dampingRatio = 0.78f, stiffness = Spring.StiffnessMedium),
                             initialVelocity = velocity
                         )
                         if (steps != 0) {
@@ -471,13 +481,13 @@ private fun WheelCarousel(
 
         Text(
             text = stringResource(R.string.sort_hint),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
             textAlign = TextAlign.Center,
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
-                .padding(top = 8.dp)
+                .padding(top = 10.dp)
         )
 
         // Trash bin, visible right inside the wheel view - tap to jump into the Trash screen.
@@ -498,15 +508,15 @@ private fun TrashBinButton(pendingCount: Int, onClick: () -> Unit, modifier: Mod
             onClick = onClick,
             shape = CircleShape,
             color = MaterialTheme.colorScheme.surface,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
-            shadowElevation = 4.dp,
-            modifier = Modifier.size(52.dp)
+            shadowElevation = 3.dp,
+            modifier = Modifier.size(50.dp)
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(
                     Icons.Filled.DeleteSweep,
                     contentDescription = stringResource(R.string.home_trash),
-                    tint = DELETE_COLOR
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp)
                 )
             }
         }
@@ -516,13 +526,13 @@ private fun TrashBinButton(pendingCount: Int, onClick: () -> Unit, modifier: Mod
                 color = DELETE_COLOR,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .size(20.dp)
+                    .size(18.dp)
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Text(
                         pendingCount.toString(),
                         color = Color.White,
-                        style = MaterialTheme.typography.labelLarge.copy(fontSize = 11.sp)
+                        style = MaterialTheme.typography.labelLarge.copy(fontSize = 10.sp)
                     )
                 }
             }

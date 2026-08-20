@@ -60,30 +60,29 @@ fun StatsScreen(onExit: () -> Unit) {
             Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(20.dp)
+                .padding(horizontal = 24.dp, vertical = 8.dp)
         ) {
-            StatCard(Icons.Filled.PhotoLibrary, stringResource(R.string.stats_reviewed), activeCount.toString())
-            Spacer(Modifier.height(12.dp))
-            StatCard(Icons.Filled.Delete, stringResource(R.string.stats_deleted), trashedCount.toString())
-            Spacer(Modifier.height(12.dp))
-            StatCard(Icons.Filled.Storage, stringResource(R.string.stats_space), formatBytes(trashedBytes))
+            StatRow(Icons.Filled.PhotoLibrary, stringResource(R.string.stats_reviewed), activeCount.toString())
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+            StatRow(Icons.Filled.Delete, stringResource(R.string.stats_deleted), trashedCount.toString())
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+            StatRow(Icons.Filled.Storage, stringResource(R.string.stats_space), formatBytes(trashedBytes))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
         }
     }
 }
 
 @Composable
-private fun StatCard(icon: ImageVector, label: String, value: String) {
-    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.padding(20.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(32.dp))
-            Spacer(Modifier.width(16.dp))
-            Column {
-                Text(value, style = MaterialTheme.typography.headlineMedium)
-                Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
+private fun StatRow(icon: ImageVector, label: String, value: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 20.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(22.dp))
+        Spacer(Modifier.width(16.dp))
+        Text(label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+        Text(value, style = MaterialTheme.typography.headlineMedium)
     }
 }

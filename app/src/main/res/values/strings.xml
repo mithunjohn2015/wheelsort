@@ -1,19 +1,20 @@
 <resources>
-    <string name="app_name">WheelSort</string>
+    <string name="app_name">Photo Manager – Swipe Clean</string>
 
     <string name="permission_title">Access your photos</string>
-    <string name="permission_body">WheelSort needs access to your photo library to let you review, sort, and clean it up.</string>
+    <string name="permission_body">Photo Manager needs access to your photo library to let you review, sort, and clean it up.</string>
     <string name="permission_grant">Grant access</string>
     <string name="permission_denied">Photo access was denied. You can enable it from system settings.</string>
     <string name="permission_open_settings">Open settings</string>
 
-    <string name="home_title">WheelSort</string>
-    <string name="home_subtitle">Swipe through your photos like a deck of cards</string>
+    <string name="home_title">Photo Manager</string>
+    <string name="home_subtitle">Swipe through your photos, keep what matters</string>
     <string name="home_all_photos">All Photos</string>
     <string name="home_choose_album">Choose an album</string>
     <string name="home_start">Start sorting</string>
     <string name="home_trash">Trash</string>
     <string name="home_stats">Stats</string>
+    <string name="home_organize">Organize</string>
     <string name="home_photo_count">%1$d photos</string>
 
     <string name="sort_keep">KEEP</string>
@@ -39,6 +40,18 @@
     <string name="stats_kept">Kept</string>
     <string name="stats_deleted">Sent to trash</string>
     <string name="stats_space">Space freed</string>
+
+    <string name="organize_title">Organize by date</string>
+    <string name="organize_info">Photos are grouped by the month they were taken. Select the months you want filed into dated folders (e.g. Pictures/08-2026).</string>
+    <string name="organize_select_all">Select all</string>
+    <string name="organize_select_none">Clear</string>
+    <string name="organize_empty">No photos to organize</string>
+    <string name="organize_button">Move %1$d photos into %2$d folders</string>
+    <string name="organize_working">Organizing your photos…</string>
+    <string name="organize_done_title">Organized!</string>
+    <string name="organize_done_body">Moved %1$d photos into %2$d dated folders.</string>
+    <string name="organize_done_failed">%1$d photos couldn\'t be moved.</string>
+    <string name="organize_done_back">Done</string>
 
     <string name="action_settings">Settings</string>
 </resources>
