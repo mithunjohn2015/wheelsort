@@ -45,10 +45,10 @@ class OrganizeViewModel(application: Application) : AndroidViewModel(application
     private val folderFormat = SimpleDateFormat("MM-yyyy", Locale.US)
     private val labelFormat = SimpleDateFormat("MMMM yyyy", Locale.getDefault())
 
-    fun refresh() {
+    fun refresh(albumFilter: String? = null) {
         _uiState.value = _uiState.value.copy(isLoading = true, result = null)
         viewModelScope.launch(Dispatchers.IO) {
-            val photos = repository.queryActivePhotos()
+            val photos = repository.queryActivePhotos(bucketName = albumFilter)
             val groups = photos
                 .groupBy { folderFormat.format(Date(effectiveDate(it))) }
                 .toSortedMap(compareByDescending { it })
@@ -105,7 +105,6 @@ class OrganizeViewModel(application: Application) : AndroidViewModel(application
             pendingGroups = emptyList()
             _uiState.value = _uiState.value.copy(isWorking = false, selected = emptySet(), result = result)
             onDone(result)
-            refresh()
         }
     }
 }

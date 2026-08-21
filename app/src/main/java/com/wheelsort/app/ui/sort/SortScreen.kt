@@ -39,7 +39,6 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
@@ -55,9 +54,7 @@ import com.wheelsort.app.data.Photo
 import com.wheelsort.app.util.formatBytes
 import kotlinx.coroutines.launch
 import kotlin.math.abs
-import kotlin.math.cos
 import kotlin.math.roundToInt
-import kotlin.math.sin
 
 private enum class SortPhase { LOADING, COMPLETE, WHEEL }
 
@@ -245,35 +242,40 @@ private fun SessionCompleteState(reviewed: Int, freedBytes: Long, onBack: () -> 
 
 /** Only prev/current/next are rendered - simpler, calmer, and cuts decode load significantly. */
 private const val VISIBLE_RADIUS = 1
-private const val ANGLE_PER_SLOT_DEG = 52f
 private const val PHOTO_REQUEST_PX = 1080
+private const val MIN_SCALE = 0.60f
+private const val MIN_ALPHA = 0.5f
+private const val SLOT_SPACING_FRACTION = 0.40f
 private val KEEP_COLOR = com.wheelsort.app.ui.theme.ActionKeep
 private val DELETE_COLOR = com.wheelsort.app.ui.theme.ActionDelete
 private val NEUTRAL_SHADOW = Color.Black.copy(alpha = 0.32f)
 
-/** Smoothstep - cheap, and gives motion a gentler ease-out than a raw linear/cosine mapping. */
+/** Smoothstep - cheap, and gives motion a gentler ease-out than a raw linear mapping. */
 private fun smooth(t: Float): Float {
     val c = t.coerceIn(0f, 1f)
     return c * c * (3f - 2f * c)
 }
 
 /** Vertical screen position (px, relative to wheel center) for a slot at [signedDistance]. */
-private fun wheelYPx(signedDistance: Float, radiusPx: Float): Float {
-    val angleRad = Math.toRadians((signedDistance * ANGLE_PER_SLOT_DEG).toDouble())
-    return (radiusPx * sin(angleRad)).toFloat()
+private fun slotTranslationY(signedDistance: Float, spacingPx: Float): Float = signedDistance * spacingPx
+
+/** 1 = dead center (full size), shrinking smoothly as distance grows. */
+private fun slotScale(signedDistance: Float): Float {
+    val closeness = 1f - abs(signedDistance).coerceIn(0f, 1f)
+    return MIN_SCALE + (1f - MIN_SCALE) * smooth(closeness)
 }
 
-/** How "face-on" a slot is (1 = dead center, 0 = edge-on/behind), before easing. */
-private fun wheelDepth(signedDistance: Float): Float {
-    val angleRad = Math.toRadians((signedDistance * ANGLE_PER_SLOT_DEG).toDouble())
-    return cos(angleRad).toFloat().coerceIn(0f, 1f)
+private fun slotAlpha(signedDistance: Float): Float {
+    val closeness = 1f - abs(signedDistance).coerceIn(0f, 1f)
+    return MIN_ALPHA + (1f - MIN_ALPHA) * smooth(closeness)
 }
 
 /**
- * A real wheel: photos sit along a vertical circular arc (angle = distance-from-center * a fixed
- * step), curving away and shrinking/fading continuously toward the edges like a rotating drum
- * viewed face-on. A fast vertical flick spins through several photos using real release velocity.
- * The centered card glows green/red as you drag it, rather than flooding the whole screen with color.
+ * The wheel: the centered photo renders at full size; the previous/next photo shrink and fade
+ * continuously as you drag, growing back to full size as they cross through center - a plain,
+ * reliable scale animation rather than a 3D-tilted one (which is more prone to rendering glitches
+ * on some devices' hardware layers). A fast vertical flick spins through several photos using
+ * real release velocity. The centered card glows green/red as you drag it.
  */
 @Composable
 private fun WheelCarousel(
@@ -295,7 +297,6 @@ private fun WheelCarousel(
     var slotHeightPx by remember { mutableFloatStateOf(1f) }
     var containerHeightPx by remember { mutableFloatStateOf(1f) }
     val decay = rememberSplineBasedDecay<Float>()
-    val density = LocalDensity.current
 
     // pointerInput(Unit) keeps the same gesture coroutine alive across recompositions, so
     // callbacks inside it must read state through this rather than closing over `photos` /
@@ -338,14 +339,14 @@ private fun WheelCarousel(
                 onDown = { position ->
                     val state = latestState.value
                     val slotPx = slotHeightPx.coerceAtLeast(1f)
-                    val radius = containerHeightPx * 0.66f
+                    val spacing = containerHeightPx * SLOT_SPACING_FRACTION
                     val touchFromCenter = position.y - containerHeightPx / 2f
                     var bestSlot = 0
                     var bestDist = Float.MAX_VALUE
                     for (candidate in -VISIBLE_RADIUS..VISIBLE_RADIUS) {
                         if (state.photos.getOrNull(state.currentIndex + candidate) == null) continue
                         val signedDistance = candidate + verticalOffset.value / slotPx
-                        val y = wheelYPx(signedDistance, radius)
+                        val y = slotTranslationY(signedDistance, spacing)
                         val d = abs(touchFromCenter - y)
                         if (d < bestDist) { bestDist = d; bestSlot = candidate }
                     }
@@ -433,7 +434,7 @@ private fun WheelCarousel(
         contentAlignment = Alignment.Center
     ) {
         // Draw furthest-from-the-active-card first, active card last, so whichever photo is
-        // actually being swiped renders on top of its shrinking, tilted neighbors.
+        // actually being swiped renders on top of its shrinking neighbors.
         val drawOrder = (-VISIBLE_RADIUS..VISIBLE_RADIUS).sortedByDescending { abs(it - activeSwipeSlot) }
         for (slot in drawOrder) {
             val i = currentIndex + slot
@@ -442,26 +443,22 @@ private fun WheelCarousel(
 
             Box(
                 modifier = Modifier
-                    .fillMaxWidth(0.82f)
-                    .fillMaxHeight(0.34f)
+                    .fillMaxWidth(0.84f)
+                    .fillMaxHeight(0.42f)
                     .graphicsLayer {
                         // Everything here reads live animated/drag state directly at draw-time,
                         // so the wheel spinning does NOT trigger recomposition every frame - only
                         // the render layer's transform updates, which is what makes this smooth.
                         val signedDistance = slot + verticalOffset.value / slotHeightPx.coerceAtLeast(1f)
-                        val radius = containerHeightPx * 0.66f
-                        val y = wheelYPx(signedDistance, radius)
-                        val rawDepth = wheelDepth(signedDistance)
-                        val depth = smooth(rawDepth)
+                        val spacing = containerHeightPx * SLOT_SPACING_FRACTION
                         val dragMag = (abs(dragState.offsetX) / dragState.widthPx.coerceAtLeast(1f)).coerceIn(0f, 1f)
                         val dim = if (isDraggable) 1f else 1f - dragMag * 0.45f
+                        val scale = slotScale(signedDistance)
 
-                        translationY = y
-                        scaleX = 0.5f + 0.5f * depth
-                        scaleY = 0.5f + 0.5f * depth
-                        alpha = depth * dim
-                        rotationX = signedDistance * ANGLE_PER_SLOT_DEG
-                        cameraDistance = 12f * density.density
+                        translationY = slotTranslationY(signedDistance, spacing)
+                        scaleX = scale
+                        scaleY = scale
+                        alpha = slotAlpha(signedDistance) * dim
                     }
             ) {
                 if (isDraggable) {

@@ -1,10 +1,15 @@
 package com.wheelsort.app
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.animation.ObjectAnimator
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
+import android.view.View
+import android.view.animation.AccelerateInterpolator
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -15,6 +20,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.core.content.ContextCompat
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.wheelsort.app.ui.navigation.WheelSortNavHost
@@ -24,7 +30,34 @@ import com.wheelsort.app.util.readImagesPermission
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        val splashScreen = installSplashScreen()
         super.onCreate(savedInstanceState)
+
+        // A small custom exit: the icon punches up and fades as the splash hands off to the
+        // app content, instead of the system's default instant cut.
+        splashScreen.setOnExitAnimationListener { splashScreenView ->
+            val iconScaleX = ObjectAnimator.ofFloat(splashScreenView.iconView, View.SCALE_X, 1f, 1.15f, 0f)
+            val iconScaleY = ObjectAnimator.ofFloat(splashScreenView.iconView, View.SCALE_Y, 1f, 1.15f, 0f)
+            val viewFade = ObjectAnimator.ofFloat(splashScreenView.view, View.ALPHA, 1f, 0f)
+
+            listOf(iconScaleX, iconScaleY).forEach {
+                it.duration = 360
+                it.interpolator = AccelerateInterpolator()
+            }
+            viewFade.duration = 260
+            viewFade.startDelay = 140
+
+            iconScaleX.addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                    splashScreenView.remove()
+                }
+            })
+
+            iconScaleX.start()
+            iconScaleY.start()
+            viewFade.start()
+        }
+
         setContent {
             WheelSortTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {

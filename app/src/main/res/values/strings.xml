@@ -42,6 +42,7 @@
     <string name="stats_space">Space freed</string>
 
     <string name="organize_title">Organize by date</string>
+    <string name="organize_pick_folder_info">Choose a folder to organize. Its photos will be grouped by month and moved into dated folders.</string>
     <string name="organize_info">Photos are grouped by the month they were taken. Select the months you want filed into dated folders (e.g. Pictures/08-2026).</string>
     <string name="organize_select_all">Select all</string>
     <string name="organize_select_none">Clear</string>

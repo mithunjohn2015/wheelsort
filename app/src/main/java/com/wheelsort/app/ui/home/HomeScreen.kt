@@ -24,6 +24,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -31,6 +32,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.wheelsort.app.R
 import com.wheelsort.app.data.PhotoRepository
+import com.wheelsort.app.ui.theme.AccentPrimary
+import com.wheelsort.app.ui.theme.ActionDelete
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -55,19 +58,37 @@ fun HomeScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(horizontal = 24.dp)
         ) {
-            Spacer(Modifier.height(8.dp))
-            Text(
-                stringResource(R.string.home_title),
-                style = MaterialTheme.typography.headlineLarge
-            )
-            Spacer(Modifier.height(2.dp))
-            Text(
-                stringResource(R.string.home_subtitle),
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        Brush.linearGradient(
+                            listOf(
+                                AccentPrimary.copy(alpha = 0.16f),
+                                Color(0xFFE0704F).copy(alpha = 0.10f),
+                                Color.Transparent
+                            )
+                        )
+                    )
+                    .padding(horizontal = 24.dp)
+                    .padding(top = 20.dp, bottom = 20.dp)
+            ) {
+                Column {
+                    Text(
+                        stringResource(R.string.home_title),
+                        style = MaterialTheme.typography.headlineLarge
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        stringResource(R.string.home_subtitle),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Column(modifier = Modifier.weight(1f).padding(horizontal = 24.dp)) {
 
             Spacer(Modifier.height(28.dp))
             SortOrderTabs(newestFirst = newestFirst, onChange = { newestFirst = it })
@@ -98,9 +119,24 @@ fun HomeScreen(
             }
 
             Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                QuietAction(icon = Icons.Filled.DeleteSweep, label = stringResource(R.string.home_trash), onClick = onOpenTrash)
-                QuietAction(icon = Icons.Filled.Insights, label = stringResource(R.string.home_stats), onClick = onOpenStats)
-                QuietAction(icon = Icons.Filled.CalendarMonth, label = stringResource(R.string.home_organize), onClick = onOpenOrganize)
+                QuietAction(
+                    icon = Icons.Filled.DeleteSweep,
+                    label = stringResource(R.string.home_trash),
+                    accent = ActionDelete,
+                    onClick = onOpenTrash
+                )
+                QuietAction(
+                    icon = Icons.Filled.Insights,
+                    label = stringResource(R.string.home_stats),
+                    accent = Color(0xFF3FA7D6),
+                    onClick = onOpenStats
+                )
+                QuietAction(
+                    icon = Icons.Filled.CalendarMonth,
+                    label = stringResource(R.string.home_organize),
+                    accent = Color(0xFFE0A72E),
+                    onClick = onOpenOrganize
+                )
             }
             Spacer(Modifier.height(16.dp))
             Button(
@@ -115,6 +151,7 @@ fun HomeScreen(
                 Text(stringResource(R.string.home_start), style = MaterialTheme.typography.titleMedium)
             }
             Spacer(Modifier.height(20.dp))
+            }
         }
     }
 }
@@ -199,15 +236,23 @@ private fun AlbumRow(name: String, selected: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun QuietAction(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
-    Row(
+private fun QuietAction(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, accent: Color, onClick: () -> Unit) {
+    Column(
         modifier = Modifier
             .clickable(onClick = onClick)
-            .padding(vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .padding(vertical = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
-        Spacer(Modifier.width(6.dp))
+        Box(
+            modifier = Modifier
+                .size(44.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(accent.copy(alpha = 0.14f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(20.dp))
+        }
+        Spacer(Modifier.height(6.dp))
         Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
