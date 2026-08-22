@@ -17,6 +17,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.rememberSplineBasedDecay
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -32,7 +33,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.painter.ColorPainter
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -71,40 +75,37 @@ fun SortScreen(
     var viewerPhoto by remember { mutableStateOf<Photo?>(null) }
 
     var isFlushing by remember { mutableStateOf(false) }
-    var popAfterFlush by remember { mutableStateOf(false) }
+    var afterFlush by remember { mutableStateOf<(() -> Unit)?>(null) }
 
     val flushLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartIntentSenderForResult()
     ) { result ->
         viewModel.onFlushResult(result.resultCode == android.app.Activity.RESULT_OK)
         isFlushing = false
-        if (popAfterFlush) {
-            popAfterFlush = false
-            onExit()
-        }
+        afterFlush?.invoke()
+        afterFlush = null
     }
     val favoriteLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartIntentSenderForResult()
     ) { /* no-op, best effort */ }
 
-    fun performFlush(thenPop: Boolean) {
+    fun performFlush(then: () -> Unit) {
         val intent = viewModel.buildFlushIntent()
         if (intent == null) {
-            if (thenPop) onExit()
+            then()
             return
         }
         isFlushing = true
-        popAfterFlush = thenPop
+        afterFlush = then
         flushLauncher.launch(IntentSenderRequest.Builder(intent.intentSender).build())
     }
 
     fun handleExit() {
-        if (viewModel.uiState.value.pendingDeleteCount > 0) performFlush(thenPop = true) else onExit()
+        if (viewModel.uiState.value.pendingDeleteCount > 0) performFlush(then = onExit) else onExit()
     }
 
-    // Auto-flush once enough deletes have piled up locally, so the trash dialog stays rare.
-    LaunchedEffect(uiState.pendingDeleteCount) {
-        if (!isFlushing && viewModel.shouldAutoFlush()) performFlush(thenPop = false)
+    fun handleOpenTrash() {
+        if (viewModel.uiState.value.pendingDeleteCount > 0) performFlush(then = onOpenTrash) else onOpenTrash()
     }
 
     LaunchedEffect(albumFilter, newestFirst) { viewModel.loadPhotos(albumFilter, newestFirst) }
@@ -151,7 +152,7 @@ fun SortScreen(
                         onCommitKeep = { photo -> viewModel.onKeep(photo) },
                         onNavigateDelta = { steps -> viewModel.goToDelta(steps) },
                         onTapCenter = { photo -> viewerPhoto = photo },
-                        onOpenTrash = onOpenTrash,
+                        onOpenTrash = ::handleOpenTrash,
                         pendingDeleteCount = uiState.pendingDeleteCount
                     )
                 }
@@ -242,7 +243,7 @@ private fun SessionCompleteState(reviewed: Int, freedBytes: Long, onBack: () -> 
 
 /** Only prev/current/next are rendered - simpler, calmer, and cuts decode load significantly. */
 private const val VISIBLE_RADIUS = 1
-private const val PHOTO_REQUEST_PX = 1080
+private const val PHOTO_REQUEST_PX = 900
 private const val MIN_SCALE = 0.60f
 private const val MIN_ALPHA = 0.5f
 private const val SLOT_SPACING_FRACTION = 0.40f
@@ -314,7 +315,7 @@ private fun WheelCarousel(
     // the real reason scrolling still felt laggy even with preloading in place before.
     LaunchedEffect(currentIndex, photos) {
         val loader = context.imageLoader
-        val range = (currentIndex - VISIBLE_RADIUS - 3)..(currentIndex + VISIBLE_RADIUS + 3)
+        val range = (currentIndex - VISIBLE_RADIUS - 8)..(currentIndex + VISIBLE_RADIUS + 8)
         for (i in range) {
             val p = photos.getOrNull(i) ?: continue
             loader.enqueue(ImageRequest.Builder(context).data(p.uri).size(PHOTO_REQUEST_PX).build())
@@ -325,19 +326,23 @@ private fun WheelCarousel(
     val dragProgress = (abs(dragState.offsetX) / commitDist).coerceIn(0f, 1f)
     val dragDirectionColor = if (dragState.offsetX >= 0) KEEP_COLOR else DELETE_COLOR
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            // Subtle wash only - the real feedback is the glowing card below, not a flat color flood.
-            .background(dragDirectionColor.copy(alpha = dragProgress * 0.08f))
-            .onGloballyPositioned {
-                containerHeightPx = it.size.height.toFloat()
-                slotHeightPx = it.size.height * 0.30f
-            }
-            .wheelSortGesture(
-                onDown = { position ->
-                    val state = latestState.value
+    Box(modifier = Modifier.fillMaxSize()) {
+        // Base + soft colorful gradient-mesh pattern, sitting behind everything else.
+        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background))
+        WheelMeshBackground(modifier = Modifier.fillMaxSize())
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                // Clearly visible now - this is the main swipe-direction feedback.
+                .background(dragDirectionColor.copy(alpha = dragProgress * 0.38f))
+                .onGloballyPositioned {
+                    containerHeightPx = it.size.height.toFloat()
+                    slotHeightPx = it.size.height * 0.30f
+                }
+                .wheelSortGesture(
+                    onDown = { position ->
+                        val state = latestState.value
                     val slotPx = slotHeightPx.coerceAtLeast(1f)
                     val spacing = containerHeightPx * SLOT_SPACING_FRACTION
                     val touchFromCenter = position.y - containerHeightPx / 2f
@@ -495,7 +500,37 @@ private fun WheelCarousel(
                 .align(Alignment.BottomEnd)
                 .padding(20.dp)
         )
+        }
     }
+}
+
+/**
+ * A soft, colorful "gradient mesh" backdrop - several large, low-opacity radial blobs in the
+ * app's accent palette. Reads as intentional and alive rather than a flat black/neutral void,
+ * without competing with the photos for attention (kept subtle and mostly out of the center).
+ */
+@Composable
+private fun WheelMeshBackground(modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        drawMeshBlob(Offset(w * 0.12f, h * 0.10f), w * 0.60f, Color(0xFF4A47E3))
+        drawMeshBlob(Offset(w * 0.95f, h * 0.22f), w * 0.55f, Color(0xFFE0704F))
+        drawMeshBlob(Offset(w * 0.05f, h * 0.88f), w * 0.60f, Color(0xFF1FAE83))
+        drawMeshBlob(Offset(w * 1.0f, h * 0.92f), w * 0.55f, Color(0xFFD6579B))
+    }
+}
+
+private fun DrawScope.drawMeshBlob(center: Offset, radius: Float, color: Color) {
+    drawCircle(
+        brush = Brush.radialGradient(
+            colors = listOf(color.copy(alpha = 0.26f), color.copy(alpha = 0.10f), Color.Transparent),
+            center = center,
+            radius = radius
+        ),
+        radius = radius,
+        center = center
+    )
 }
 
 @Composable

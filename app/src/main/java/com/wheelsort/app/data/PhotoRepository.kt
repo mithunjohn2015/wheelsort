@@ -132,4 +132,20 @@ class PhotoRepository(private val context: Context) {
             false
         }
     }
+
+    /**
+     * Asks the OS to generate/cache a thumbnail for this photo, discarding the result. The first
+     * time any app requests a given photo's thumbnail, Android has to decode and downsample the
+     * original file, which is the actual slow part - once that's done, every future request
+     * (from us or anyone else) for that photo is fast, regardless of Coil's own memory cache
+     * state. Calling this ahead of time across the whole photo list is what makes scrolling to a
+     * photo you haven't visited yet feel instant instead of only the first handful.
+     */
+    fun warmThumbnail(photo: Photo, sizePx: Int) {
+        try {
+            context.contentResolver.loadThumbnail(photo.uri, android.util.Size(sizePx, sizePx), null)
+        } catch (_: Exception) {
+            // best-effort - a failure here just means this one photo decodes normally when viewed
+        }
+    }
 }

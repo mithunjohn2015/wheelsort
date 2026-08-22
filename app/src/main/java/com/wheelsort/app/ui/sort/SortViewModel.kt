@@ -7,6 +7,8 @@ import androidx.lifecycle.viewModelScope
 import com.wheelsort.app.data.Photo
 import com.wheelsort.app.data.PhotoRepository
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -39,13 +41,11 @@ data class SortUiState(
     val sessionComplete: Boolean = false
 )
 
-/**
- * How many swipe-left decisions accumulate locally before we ask Android to actually
- * trash them. Swiping left is instant and silent; the one system confirmation dialog
- * only shows up roughly once per [BATCH_SIZE] deletes (or when you leave the screen),
- * instead of once per photo.
- */
-private const val BATCH_SIZE = 10
+/** Request size used for warming the cache, matched to what the wheel actually displays at. */
+private const val WARM_SIZE_PX = 900
+
+/** How many photos ahead to eagerly warm - covers a very long browsing session for most libraries. */
+private const val WARM_CAP = 600
 
 class SortViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -66,6 +66,21 @@ class SortViewModel(application: Application) : AndroidViewModel(application) {
                 isLoading = false,
                 sessionComplete = photos.isEmpty()
             )
+            warmThumbnailCache(photos)
+        }
+    }
+
+    /**
+     * Runs quietly in the background after the wheel is already showing photos. The expensive
+     * part of loading a photo is Android generating its thumbnail the first time anyone asks for
+     * it - once that's done it's cheap forever. Warming ahead of where the user is browsing means
+     * that cost happens invisibly in the background instead of as a stutter when they scroll there.
+     */
+    private suspend fun warmThumbnailCache(photos: List<Photo>) {
+        val cap = photos.size.coerceAtMost(WARM_CAP)
+        for (i in 0 until cap) {
+            currentCoroutineContext().ensureActive()
+            repository.warmThumbnail(photos[i], WARM_SIZE_PX)
         }
     }
 
@@ -156,9 +171,6 @@ class SortViewModel(application: Application) : AndroidViewModel(application) {
         }
         return last
     }
-
-    /** True once enough deletes have queued up that we should flush automatically. */
-    fun shouldAutoFlush(): Boolean = pendingQueue.size >= BATCH_SIZE
 
     /** Builds the one system confirmation for everything queued so far, or null if nothing to flush. */
     fun buildFlushIntent(): PendingIntent? {
