@@ -26,6 +26,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -56,6 +57,7 @@ import coil.request.ImageRequest
 import com.wheelsort.app.R
 import com.wheelsort.app.data.Photo
 import com.wheelsort.app.util.formatBytes
+import com.wheelsort.app.util.formatDuration
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -66,6 +68,7 @@ private enum class SortPhase { LOADING, COMPLETE, WHEEL }
 fun SortScreen(
     albumFilter: String?,
     newestFirst: Boolean = true,
+    screenshotsFirst: Boolean = false,
     onExit: () -> Unit,
     onOpenTrash: () -> Unit,
     viewModel: SortViewModel = viewModel()
@@ -108,7 +111,9 @@ fun SortScreen(
         if (viewModel.uiState.value.pendingDeleteCount > 0) performFlush(then = onOpenTrash) else onOpenTrash()
     }
 
-    LaunchedEffect(albumFilter, newestFirst) { viewModel.loadPhotos(albumFilter, newestFirst) }
+    LaunchedEffect(albumFilter, newestFirst, screenshotsFirst) {
+        viewModel.loadPhotos(albumFilter, newestFirst, screenshotsFirst)
+    }
 
     Scaffold(
         topBar = {
@@ -599,16 +604,50 @@ private fun PhotoCard(
         shape = RoundedCornerShape(24.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
-        AsyncImage(
-            model = ImageRequest.Builder(context)
-                .data(photo.uri)
-                .size(PHOTO_REQUEST_PX)
-                .crossfade(120)
-                .build(),
-            contentDescription = photo.displayName,
-            modifier = Modifier.fillMaxSize(),
-            contentScale = ContentScale.Crop,
-            placeholder = ColorPainter(MaterialTheme.colorScheme.surfaceVariant)
-        )
+        Box {
+            AsyncImage(
+                model = ImageRequest.Builder(context)
+                    .data(photo.uri)
+                    .size(PHOTO_REQUEST_PX)
+                    .crossfade(120)
+                    .build(),
+                contentDescription = photo.displayName,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+                placeholder = ColorPainter(MaterialTheme.colorScheme.surfaceVariant)
+            )
+            if (photo.isVideo) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Box(
+                        modifier = Modifier
+                            .size(52.dp)
+                            .clip(CircleShape)
+                            .background(Color.Black.copy(alpha = 0.45f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Filled.PlayArrow,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
+                }
+                Surface(
+                    color = Color.Black.copy(alpha = 0.55f),
+                    shape = RoundedCornerShape(6.dp),
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(8.dp)
+                ) {
+                    Text(
+                        formatDuration(photo.durationMs),
+                        color = Color.White,
+                        style = MaterialTheme.typography.labelLarge,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
+        }
     }
 }

@@ -10,25 +10,30 @@ import android.os.Bundle
 import android.provider.MediaStore
 
 /**
- * All photo reads/writes go through MediaStore, respecting scoped storage.
+ * All photo/video reads/writes go through MediaStore, respecting scoped storage.
  *
- * Deleting a photo does NOT touch the filesystem directly. Instead we ask the
+ * Deleting an item does NOT touch the filesystem directly. Instead we ask the
  * system to "trash" it via [createTrashRequest] - this is the real Android
- * equivalent of moving a photo to a Trash folder: the OS marks it IS_TRASHED,
+ * equivalent of moving it to a Trash folder: the OS marks it IS_TRASHED,
  * hides it from the gallery, and keeps it recoverable until the user (or the
  * system, after ~30 days) permanently removes it. Restoring calls the same
  * API with trash = false. Permanent deletion uses [createDeleteRequest].
  *
- * Moving a photo into a dated folder works the same way: we don't touch files
+ * Moving an item into a dated folder works the same way: we don't touch files
  * directly, we ask for write access via [createWriteRequest], then update the
  * MediaStore row's RELATIVE_PATH via [moveToFolder] - the system physically
  * relocates the file on disk to match.
+ *
+ * Images and videos live in separate MediaStore collections but are merged into
+ * one [Photo] list here, since every operation above works identically on both -
+ * it only needs the item's Uri, which already encodes which collection it's from.
  */
 class PhotoRepository(private val context: Context) {
 
-    private val collection: Uri = MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
+    private val imagesCollection: Uri = MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
+    private val videoCollection: Uri = MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
 
-    private val projection = arrayOf(
+    private val imageProjection = arrayOf(
         MediaStore.Images.Media._ID,
         MediaStore.Images.Media.DISPLAY_NAME,
         MediaStore.Images.Media.DATE_ADDED,
@@ -38,6 +43,19 @@ class PhotoRepository(private val context: Context) {
         MediaStore.Images.Media.WIDTH,
         MediaStore.Images.Media.HEIGHT,
         MediaStore.Images.Media.IS_FAVORITE
+    )
+
+    private val videoProjection = arrayOf(
+        MediaStore.Video.Media._ID,
+        MediaStore.Video.Media.DISPLAY_NAME,
+        MediaStore.Video.Media.DATE_ADDED,
+        MediaStore.Video.Media.DATE_TAKEN,
+        MediaStore.Video.Media.SIZE,
+        MediaStore.Video.Media.BUCKET_DISPLAY_NAME,
+        MediaStore.Video.Media.WIDTH,
+        MediaStore.Video.Media.HEIGHT,
+        MediaStore.Video.Media.IS_FAVORITE,
+        MediaStore.Video.Media.DURATION
     )
 
     fun queryActivePhotos(bucketName: String? = null, newestFirst: Boolean = true): List<Photo> =
@@ -50,18 +68,38 @@ class PhotoRepository(private val context: Context) {
         queryActivePhotos().mapNotNull { it.bucketName }.filter { it.isNotBlank() }.distinct().sorted()
 
     private fun query(trashedOnly: Boolean, bucketName: String?, newestFirst: Boolean): List<Photo> {
-        val photos = mutableListOf<Photo>()
+        val images = queryCollection(imagesCollection, imageProjection, isVideo = false, trashedOnly, bucketName)
+        val videos = queryCollection(videoCollection, videoProjection, isVideo = true, trashedOnly, bucketName)
+        val merged = images + videos
+        return if (newestFirst) merged.sortedByDescending { it.dateAdded } else merged.sortedBy { it.dateAdded }
+    }
+
+    private fun queryCollection(
+        collection: Uri,
+        projection: Array<String>,
+        isVideo: Boolean,
+        trashedOnly: Boolean,
+        bucketName: String?
+    ): List<Photo> {
+        val items = mutableListOf<Photo>()
+        // MediaColumns constants (RELATIVE_PATH, and the ones below) are shared across Images/Video,
+        // so it's safe to always reference them via the base MediaColumns interface for clarity.
+        val idCol = MediaStore.MediaColumns._ID
+        val nameCol = MediaStore.MediaColumns.DISPLAY_NAME
+        val dateAddedCol = MediaStore.MediaColumns.DATE_ADDED
+        val dateTakenCol = MediaStore.MediaColumns.DATE_TAKEN
+        val sizeCol = MediaStore.MediaColumns.SIZE
+        val bucketCol = MediaStore.MediaColumns.BUCKET_DISPLAY_NAME
+        val widthCol = MediaStore.MediaColumns.WIDTH
+        val heightCol = MediaStore.MediaColumns.HEIGHT
+        val favCol = MediaStore.MediaColumns.IS_FAVORITE
 
         val queryArgs = Bundle().apply {
-            putString(
-                ContentResolver.QUERY_ARG_SQL_SORT_ORDER,
-                "${MediaStore.Images.Media.DATE_ADDED} ${if (newestFirst) "DESC" else "ASC"}"
-            )
+            // Sort order here doesn't matter for correctness - images and videos are merged and
+            // re-sorted by the actual requested direction afterward in query().
+            putString(ContentResolver.QUERY_ARG_SQL_SORT_ORDER, "$dateAddedCol DESC")
             if (bucketName != null) {
-                putString(
-                    ContentResolver.QUERY_ARG_SQL_SELECTION,
-                    "${MediaStore.Images.Media.BUCKET_DISPLAY_NAME} = ?"
-                )
+                putString(ContentResolver.QUERY_ARG_SQL_SELECTION, "$bucketCol = ?")
                 putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, arrayOf(bucketName))
             }
             putInt(
@@ -70,37 +108,48 @@ class PhotoRepository(private val context: Context) {
             )
         }
 
-        context.contentResolver.query(collection, projection, queryArgs, null)?.use { cursor ->
-            val idCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
-            val nameCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
-            val dateCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_ADDED)
-            val dateTakenCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATE_TAKEN)
-            val sizeCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.SIZE)
-            val bucketCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
-            val widthCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.WIDTH)
-            val heightCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.HEIGHT)
-            val favCol = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.IS_FAVORITE)
+        try {
+            context.contentResolver.query(collection, projection, queryArgs, null)?.use { cursor ->
+                val idIdx = cursor.getColumnIndexOrThrow(idCol)
+                val nameIdx = cursor.getColumnIndexOrThrow(nameCol)
+                val dateIdx = cursor.getColumnIndexOrThrow(dateAddedCol)
+                val dateTakenIdx = cursor.getColumnIndexOrThrow(dateTakenCol)
+                val sizeIdx = cursor.getColumnIndexOrThrow(sizeCol)
+                val bucketIdx = cursor.getColumnIndexOrThrow(bucketCol)
+                val widthIdx = cursor.getColumnIndexOrThrow(widthCol)
+                val heightIdx = cursor.getColumnIndexOrThrow(heightCol)
+                val favIdx = cursor.getColumnIndexOrThrow(favCol)
+                val durationIdx = if (isVideo) cursor.getColumnIndex(MediaStore.Video.Media.DURATION) else -1
 
-            while (cursor.moveToNext()) {
-                val id = cursor.getLong(idCol)
-                val uri = ContentUris.withAppendedId(collection, id)
-                photos.add(
-                    Photo(
-                        id = id,
-                        uri = uri,
-                        displayName = cursor.getString(nameCol) ?: "",
-                        dateAdded = cursor.getLong(dateCol) * 1000L,
-                        dateTaken = cursor.getLong(dateTakenCol),
-                        size = cursor.getLong(sizeCol),
-                        bucketName = cursor.getString(bucketCol),
-                        width = cursor.getInt(widthCol),
-                        height = cursor.getInt(heightCol),
-                        isFavorite = cursor.getInt(favCol) == 1
+                while (cursor.moveToNext()) {
+                    val rawId = cursor.getLong(idIdx)
+                    val uri = ContentUris.withAppendedId(collection, rawId)
+                    items.add(
+                        Photo(
+                            // Images and videos each auto-increment their own _ID independently,
+                            // so raw IDs can collide across collections - negate video IDs to keep
+                            // every Photo.id unique for selection sets / LazyColumn keys / etc.
+                            // The real Uri (built from rawId above) is unaffected and always correct.
+                            id = if (isVideo) -rawId else rawId,
+                            uri = uri,
+                            displayName = cursor.getString(nameIdx) ?: "",
+                            dateAdded = cursor.getLong(dateIdx) * 1000L,
+                            dateTaken = cursor.getLong(dateTakenIdx),
+                            size = cursor.getLong(sizeIdx),
+                            bucketName = cursor.getString(bucketIdx),
+                            width = cursor.getInt(widthIdx),
+                            height = cursor.getInt(heightIdx),
+                            isFavorite = cursor.getInt(favIdx) == 1,
+                            isVideo = isVideo,
+                            durationMs = if (durationIdx >= 0) cursor.getLong(durationIdx) else 0
+                        )
                     )
-                )
+                }
             }
+        } catch (_: Exception) {
+            // If video querying fails on some device/config, fail soft - images still work fine.
         }
-        return photos
+        return items
     }
 
     /** trash = true moves to Trash, trash = false restores. */
@@ -118,14 +167,15 @@ class PhotoRepository(private val context: Context) {
         MediaStore.createWriteRequest(context.contentResolver, uris)
 
     /**
-     * Physically relocates a photo into Pictures/[folderName]/ by updating its RELATIVE_PATH.
-     * Must be called after the corresponding [createWriteRequest] has been granted. Returns
-     * true on success.
+     * Physically relocates an item into Pictures/[folderName]/ (or Movies/[folderName]/ for
+     * videos) by updating its RELATIVE_PATH. Must be called after the corresponding
+     * [createWriteRequest] has been granted. Returns true on success.
      */
     fun moveToFolder(photo: Photo, folderName: String): Boolean {
         return try {
+            val basePath = if (photo.isVideo) "Movies" else "Pictures"
             val values = ContentValues().apply {
-                put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/$folderName/")
+                put(MediaStore.MediaColumns.RELATIVE_PATH, "$basePath/$folderName/")
             }
             context.contentResolver.update(photo.uri, values, null, null) > 0
         } catch (_: Exception) {
@@ -134,18 +184,18 @@ class PhotoRepository(private val context: Context) {
     }
 
     /**
-     * Asks the OS to generate/cache a thumbnail for this photo, discarding the result. The first
-     * time any app requests a given photo's thumbnail, Android has to decode and downsample the
+     * Asks the OS to generate/cache a thumbnail for this item, discarding the result. The first
+     * time any app requests a given item's thumbnail, Android has to decode and downsample the
      * original file, which is the actual slow part - once that's done, every future request
-     * (from us or anyone else) for that photo is fast, regardless of Coil's own memory cache
-     * state. Calling this ahead of time across the whole photo list is what makes scrolling to a
+     * (from us or anyone else) for that item is fast, regardless of Coil's own memory cache
+     * state. Calling this ahead of time across the whole list is what makes scrolling to a
      * photo you haven't visited yet feel instant instead of only the first handful.
      */
     fun warmThumbnail(photo: Photo, sizePx: Int) {
         try {
             context.contentResolver.loadThumbnail(photo.uri, android.util.Size(sizePx, sizePx), null)
         } catch (_: Exception) {
-            // best-effort - a failure here just means this one photo decodes normally when viewed
+            // best-effort - a failure here just means this one item decodes normally when viewed
         }
     }
 }

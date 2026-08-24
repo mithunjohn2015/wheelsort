@@ -2,11 +2,14 @@ package com.wheelsort.app.ui.stats
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.*
@@ -21,10 +24,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import coil.compose.AsyncImage
 import com.wheelsort.app.R
+import com.wheelsort.app.data.Photo
 import com.wheelsort.app.data.PhotoRepository
 import com.wheelsort.app.ui.theme.AccentPrimary
 import com.wheelsort.app.ui.theme.ActionDelete
@@ -32,12 +39,19 @@ import com.wheelsort.app.util.formatBytes
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
+private val MONTH_ACCENTS = listOf(
+    Color(0xFF4A47E3), Color(0xFFE0704F), Color(0xFF1FAE83),
+    Color(0xFFD6579B), Color(0xFF3FA7D6), Color(0xFFE0A72E)
+)
+
 @Composable
 fun StatsScreen(onExit: () -> Unit) {
     val context = LocalContext.current
     var activeCount by remember { mutableStateOf(0) }
     var trashedCount by remember { mutableStateOf(0) }
     var trashedBytes by remember { mutableStateOf(0L) }
+    var albumBreakdown by remember { mutableStateOf<List<Pair<String, Long>>>(emptyList()) }
+    var largestPhotos by remember { mutableStateOf<List<Photo>>(emptyList()) }
 
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) {
@@ -47,6 +61,13 @@ fun StatsScreen(onExit: () -> Unit) {
             activeCount = active.size
             trashedCount = trashed.size
             trashedBytes = trashed.sumOf { it.size }
+            albumBreakdown = active
+                .filter { !it.bucketName.isNullOrBlank() }
+                .groupBy { it.bucketName!! }
+                .map { (name, photos) -> name to photos.sumOf { it.size } }
+                .sortedByDescending { it.second }
+                .take(6)
+            largestPhotos = active.sortedByDescending { it.size }.take(5)
         }
     }
 
@@ -62,18 +83,84 @@ fun StatsScreen(onExit: () -> Unit) {
             )
         }
     ) { padding ->
-        Column(
-            Modifier
+        LazyColumn(
+            modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(horizontal = 24.dp, vertical = 8.dp)
+                .padding(horizontal = 24.dp)
         ) {
-            StatRow(Icons.Filled.PhotoLibrary, AccentPrimary, stringResource(R.string.stats_reviewed), activeCount.toString())
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-            StatRow(Icons.Filled.Delete, ActionDelete, stringResource(R.string.stats_deleted), trashedCount.toString())
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
-            StatRow(Icons.Filled.Storage, Color(0xFFE0A72E), stringResource(R.string.stats_space), formatBytes(trashedBytes))
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+            item {
+                StatRow(Icons.Filled.PhotoLibrary, AccentPrimary, stringResource(R.string.stats_reviewed), activeCount.toString())
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                StatRow(Icons.Filled.Delete, ActionDelete, stringResource(R.string.stats_deleted), trashedCount.toString())
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                StatRow(Icons.Filled.Storage, Color(0xFFE0A72E), stringResource(R.string.stats_space), formatBytes(trashedBytes))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+            }
+
+            if (albumBreakdown.isNotEmpty()) {
+                item {
+                    Spacer(Modifier.height(20.dp))
+                    Text(
+                        "STORAGE BY ALBUM",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(4.dp))
+                }
+                itemsIndexed(albumBreakdown) { index, (name, size) ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Filled.Folder,
+                            contentDescription = null,
+                            tint = MONTH_ACCENTS[index % MONTH_ACCENTS.size],
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Text(name, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                        Text(formatBytes(size), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                    }
+                }
+            }
+
+            if (largestPhotos.isNotEmpty()) {
+                item {
+                    Spacer(Modifier.height(20.dp))
+                    Text(
+                        "LARGEST PHOTOS",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(4.dp))
+                }
+                items(largestPhotos, key = { it.id }) { photo ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        AsyncImage(
+                            model = photo.uri,
+                            contentDescription = photo.displayName,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            photo.displayName,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.weight(1f),
+                            maxLines = 1
+                        )
+                        Text(formatBytes(photo.size), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                    }
+                }
+            }
+            item { Spacer(Modifier.height(20.dp)) }
         }
     }
 }

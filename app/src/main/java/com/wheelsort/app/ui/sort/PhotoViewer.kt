@@ -1,5 +1,6 @@
 package com.wheelsort.app.ui.sort
 
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
 import android.text.format.DateFormat
@@ -8,16 +9,21 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -37,6 +43,7 @@ import com.wheelsort.app.data.ExifUtils
 import com.wheelsort.app.data.Photo
 import com.wheelsort.app.data.PhotoDetails
 import com.wheelsort.app.util.formatBytes
+import com.wheelsort.app.util.formatDuration
 import kotlinx.coroutines.launch
 import java.util.Date
 
@@ -58,7 +65,9 @@ fun PhotoViewerOverlay(
     var details by remember(photo.id) { mutableStateOf<PhotoDetails?>(null) }
     var isFavorite by remember(photo.id) { mutableStateOf(photo.isFavorite) }
 
-    LaunchedEffect(photo.id) { details = ExifUtils.read(context, photo.uri) }
+    LaunchedEffect(photo.id) {
+        details = if (photo.isVideo) PhotoDetails() else ExifUtils.read(context, photo.uri)
+    }
 
     BackHandler {
         if (progress.value > 0.05f) scope.launch { progress.animateTo(0f, spring(Spring.DampingRatioNoBouncy)) }
@@ -110,7 +119,37 @@ fun PhotoViewerOverlay(
                     }
             )
 
-            // top bar: close + favorite
+            if (photo.isVideo) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Box(
+                        modifier = Modifier
+                            .size(76.dp)
+                            .clip(CircleShape)
+                            .background(Color.Black.copy(alpha = 0.5f))
+                            .clickable {
+                                val playIntent = Intent(Intent.ACTION_VIEW).apply {
+                                    setDataAndType(photo.uri, "video/*")
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                try {
+                                    context.startActivity(playIntent)
+                                } catch (_: ActivityNotFoundException) {
+                                    // no video player installed - nothing sensible to fall back to
+                                }
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Filled.PlayArrow,
+                            contentDescription = "Play",
+                            tint = Color.White,
+                            modifier = Modifier.size(40.dp)
+                        )
+                    }
+                }
+            }
+
+            // top bar: close + share + edit-with + favorite
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -120,15 +159,43 @@ fun PhotoViewerOverlay(
                 IconButton(onClick = onClose) {
                     Icon(Icons.Filled.Close, contentDescription = null, tint = Color.White)
                 }
-                IconButton(onClick = {
-                    isFavorite = !isFavorite
-                    onToggleFavorite(photo)
-                }) {
-                    Icon(
-                        if (isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
-                        contentDescription = null,
-                        tint = if (isFavorite) Color(0xFFFF5E5E) else Color.White
-                    )
+                Row {
+                    IconButton(onClick = {
+                        val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                            type = "image/*"
+                            putExtra(Intent.EXTRA_STREAM, photo.uri)
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        context.startActivity(Intent.createChooser(shareIntent, null))
+                    }) {
+                        Icon(Icons.Filled.Share, contentDescription = "Share", tint = Color.White)
+                    }
+                    IconButton(onClick = {
+                        val editIntent = Intent(Intent.ACTION_EDIT).apply {
+                            setDataAndType(photo.uri, "image/*")
+                            addFlags(
+                                Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                            )
+                        }
+                        try {
+                            context.startActivity(Intent.createChooser(editIntent, "Edit with"))
+                        } catch (_: ActivityNotFoundException) {
+                            // no editor installed - silently ignore, nothing sensible to fall back to
+                        }
+                    }) {
+                        Icon(Icons.Filled.Edit, contentDescription = "Edit with\u2026", tint = Color.White)
+                    }
+                    IconButton(onClick = {
+                        isFavorite = !isFavorite
+                        onToggleFavorite(photo)
+                    }) {
+                        Icon(
+                            if (isFavorite) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                            contentDescription = null,
+                            tint = if (isFavorite) Color(0xFFFF5E5E) else Color.White
+                        )
+                    }
                 }
             }
 
@@ -187,6 +254,9 @@ private fun DetailsPanel(photo: Photo, details: PhotoDetails?, context: android.
         }
         item { DetailRow("Taken", details?.dateTaken ?: DateFormat.format("MMM d, yyyy", Date(photo.dateAdded)).toString()) }
         item { DetailRow("Resolution", "${photo.width} \u00d7 ${photo.height}") }
+        if (photo.isVideo) {
+            item { DetailRow("Duration", formatDuration(photo.durationMs)) }
+        }
         item { DetailRow("File size", formatBytes(photo.size)) }
         details?.cameraModel?.let { item { DetailRow("Camera", it) } }
         details?.exposureTime?.let { item { DetailRow("Exposure", it) } }

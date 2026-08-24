@@ -11,6 +11,9 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.wheelsort.app.ui.backup.BackupScreen
+import com.wheelsort.app.ui.duplicates.DuplicateScreen
+import com.wheelsort.app.ui.grid.GridScreen
 import com.wheelsort.app.ui.home.HomeScreen
 import com.wheelsort.app.ui.organize.OrganizeScreen
 import com.wheelsort.app.ui.sort.SortScreen
@@ -21,14 +24,22 @@ import java.net.URLEncoder
 
 private object Routes {
     const val HOME = "home"
-    const val SORT = "sort?album={album}&newestFirst={newestFirst}"
+    const val SORT = "sort?album={album}&newestFirst={newestFirst}&screenshotsFirst={screenshotsFirst}"
     const val TRASH = "trash"
     const val STATS = "stats"
     const val ORGANIZE = "organize"
+    const val BACKUP = "backup"
+    const val GRID = "grid?album={album}"
+    const val DUPLICATES = "duplicates"
 
-    fun sort(album: String?, newestFirst: Boolean): String {
+    fun sort(album: String?, newestFirst: Boolean, screenshotsFirst: Boolean): String {
         val encoded = URLEncoder.encode(album ?: "", "UTF-8")
-        return "sort?album=$encoded&newestFirst=$newestFirst"
+        return "sort?album=$encoded&newestFirst=$newestFirst&screenshotsFirst=$screenshotsFirst"
+    }
+
+    fun grid(album: String?): String {
+        val encoded = URLEncoder.encode(album ?: "", "UTF-8")
+        return "grid?album=$encoded"
     }
 }
 
@@ -56,25 +67,33 @@ fun WheelSortNavHost() {
     ) {
         composable(Routes.HOME) {
             HomeScreen(
-                onStartSorting = { album, newestFirst -> navController.navigate(Routes.sort(album, newestFirst)) },
+                onStartSorting = { album, newestFirst, screenshotsFirst ->
+                    navController.navigate(Routes.sort(album, newestFirst, screenshotsFirst))
+                },
                 onOpenTrash = { navController.navigate(Routes.TRASH) },
                 onOpenStats = { navController.navigate(Routes.STATS) },
-                onOpenOrganize = { navController.navigate(Routes.ORGANIZE) }
+                onOpenOrganize = { navController.navigate(Routes.ORGANIZE) },
+                onOpenBackup = { navController.navigate(Routes.BACKUP) },
+                onOpenGrid = { album -> navController.navigate(Routes.grid(album)) },
+                onOpenDuplicates = { navController.navigate(Routes.DUPLICATES) }
             )
         }
         composable(
             route = Routes.SORT,
             arguments = listOf(
                 navArgument("album") { type = NavType.StringType; defaultValue = "" },
-                navArgument("newestFirst") { type = NavType.BoolType; defaultValue = true }
+                navArgument("newestFirst") { type = NavType.BoolType; defaultValue = true },
+                navArgument("screenshotsFirst") { type = NavType.BoolType; defaultValue = false }
             )
         ) { backStackEntry ->
             val raw = backStackEntry.arguments?.getString("album").orEmpty()
             val album = if (raw.isBlank()) null else URLDecoder.decode(raw, "UTF-8")
             val newestFirst = backStackEntry.arguments?.getBoolean("newestFirst") ?: true
+            val screenshotsFirst = backStackEntry.arguments?.getBoolean("screenshotsFirst") ?: false
             SortScreen(
                 albumFilter = album,
                 newestFirst = newestFirst,
+                screenshotsFirst = screenshotsFirst,
                 onExit = { navController.popBackStack() },
                 onOpenTrash = { navController.navigate(Routes.TRASH) }
             )
@@ -87,6 +106,20 @@ fun WheelSortNavHost() {
         }
         composable(Routes.ORGANIZE) {
             OrganizeScreen(onExit = { navController.popBackStack() })
+        }
+        composable(Routes.BACKUP) {
+            BackupScreen(onExit = { navController.popBackStack() })
+        }
+        composable(
+            route = Routes.GRID,
+            arguments = listOf(navArgument("album") { type = NavType.StringType; defaultValue = "" })
+        ) { backStackEntry ->
+            val raw = backStackEntry.arguments?.getString("album").orEmpty()
+            val album = if (raw.isBlank()) null else URLDecoder.decode(raw, "UTF-8")
+            GridScreen(albumFilter = album, onExit = { navController.popBackStack() })
+        }
+        composable(Routes.DUPLICATES) {
+            DuplicateScreen(onExit = { navController.popBackStack() })
         }
     }
 }

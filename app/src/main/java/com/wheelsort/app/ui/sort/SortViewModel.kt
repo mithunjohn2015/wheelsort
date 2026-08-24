@@ -57,10 +57,13 @@ class SortViewModel(application: Application) : AndroidViewModel(application) {
     private val pendingQueue = ArrayDeque<Photo>()
     private var lastFlushBatch: List<Photo> = emptyList()
 
-    fun loadPhotos(albumFilter: String?, newestFirst: Boolean = true) {
+    fun loadPhotos(albumFilter: String?, newestFirst: Boolean = true, screenshotsFirst: Boolean = false) {
         _uiState.value = _uiState.value.copy(isLoading = true)
         viewModelScope.launch(Dispatchers.IO) {
-            val photos = repository.queryActivePhotos(albumFilter, newestFirst)
+            var photos = repository.queryActivePhotos(albumFilter, newestFirst)
+            if (screenshotsFirst) {
+                photos = photos.sortedByDescending { com.wheelsort.app.util.isLikelyScreenshot(it) }
+            }
             _uiState.value = SortUiState(
                 photos = photos,
                 isLoading = false,

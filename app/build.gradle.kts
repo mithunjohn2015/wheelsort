@@ -64,6 +64,8 @@ dependencies {
     implementation("androidx.exifinterface:exifinterface:1.3.7")
 
     implementation("io.coil-kt:coil-compose:2.6.0")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

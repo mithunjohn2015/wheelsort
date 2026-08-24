@@ -18,3 +18,20 @@ fun formatBytes(bytes: Long): String {
     val value = bytes / 1024.0.pow(exp.toDouble())
     return String.format("%.1f %s", value, units[exp - 1])
 }
+
+/** Cheap, metadata-only heuristic - no image decoding needed, so it's safe to run on the whole list. */
+fun isLikelyScreenshot(photo: com.wheelsort.app.data.Photo): Boolean {
+    val bucket = photo.bucketName?.lowercase() ?: ""
+    val name = photo.displayName.lowercase()
+    return bucket.contains("screenshot") || name.contains("screenshot")
+}
+
+/** mm:ss, or h:mm:ss for anything over an hour. */
+fun formatDuration(ms: Long): String {
+    val totalSeconds = ms / 1000
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val seconds = totalSeconds % 60
+    return if (hours > 0) String.format("%d:%02d:%02d", hours, minutes, seconds)
+    else String.format("%d:%02d", minutes, seconds)
+}

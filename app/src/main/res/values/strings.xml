@@ -15,6 +15,10 @@
     <string name="home_trash">Trash</string>
     <string name="home_stats">Stats</string>
     <string name="home_organize">Organize</string>
+    <string name="home_backup">Backup</string>
+    <string name="home_duplicates">Duplicates</string>
+    <string name="home_grid">Browse grid</string>
+    <string name="home_screenshots_first">Review screenshots first</string>
     <string name="home_photo_count">%1$d photos</string>
 
     <string name="sort_keep">KEEP</string>

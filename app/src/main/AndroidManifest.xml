@@ -10,6 +10,9 @@
     <!-- Android 14+ partial access support -->
     <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
 
+    <!-- Immich backup-status check: talks to the user's own self-hosted server, nothing else -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <application
         android:name=".WheelSortApp"
         android:allowBackup="true"

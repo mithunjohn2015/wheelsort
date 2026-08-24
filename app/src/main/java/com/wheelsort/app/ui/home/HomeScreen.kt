@@ -15,7 +15,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.PlayArrow
@@ -39,15 +42,19 @@ import kotlinx.coroutines.withContext
 
 @Composable
 fun HomeScreen(
-    onStartSorting: (albumFilter: String?, newestFirst: Boolean) -> Unit,
+    onStartSorting: (albumFilter: String?, newestFirst: Boolean, screenshotsFirst: Boolean) -> Unit,
     onOpenTrash: () -> Unit,
     onOpenStats: () -> Unit,
-    onOpenOrganize: () -> Unit
+    onOpenOrganize: () -> Unit,
+    onOpenBackup: () -> Unit,
+    onOpenGrid: (albumFilter: String?) -> Unit,
+    onOpenDuplicates: () -> Unit
 ) {
     val context = LocalContext.current
     var albums by remember { mutableStateOf<List<String>>(emptyList()) }
     var selectedAlbum by remember { mutableStateOf<String?>(null) }
     var newestFirst by remember { mutableStateOf(true) }
+    var screenshotsFirst by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         albums = withContext(Dispatchers.IO) { PhotoRepository(context).distinctAlbums() }
@@ -93,7 +100,10 @@ fun HomeScreen(
             Spacer(Modifier.height(28.dp))
             SortOrderTabs(newestFirst = newestFirst, onChange = { newestFirst = it })
 
-            Spacer(Modifier.height(28.dp))
+            Spacer(Modifier.height(12.dp))
+            ScreenshotsFirstToggle(checked = screenshotsFirst, onChange = { screenshotsFirst = it })
+
+            Spacer(Modifier.height(16.dp))
             Text(
                 stringResource(R.string.home_choose_album).uppercase(),
                 style = MaterialTheme.typography.labelLarge,
@@ -118,7 +128,7 @@ fun HomeScreen(
                 }
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 QuietAction(
                     icon = Icons.Filled.DeleteSweep,
                     label = stringResource(R.string.home_trash),
@@ -138,21 +148,65 @@ fun HomeScreen(
                     onClick = onOpenOrganize
                 )
             }
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                QuietAction(
+                    icon = Icons.Filled.CloudDone,
+                    label = stringResource(R.string.home_backup),
+                    accent = Color(0xFF1FAE83),
+                    onClick = onOpenBackup
+                )
+                QuietAction(
+                    icon = Icons.Filled.ContentCopy,
+                    label = stringResource(R.string.home_duplicates),
+                    accent = Color(0xFFD6579B),
+                    onClick = onOpenDuplicates
+                )
+            }
             Spacer(Modifier.height(16.dp))
-            Button(
-                onClick = { onStartSorting(selectedAlbum, newestFirst) },
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp)
-            ) {
-                Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
-                Spacer(Modifier.width(8.dp))
-                Text(stringResource(R.string.home_start), style = MaterialTheme.typography.titleMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedButton(
+                    onClick = { onOpenGrid(selectedAlbum) },
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.weight(1f).height(56.dp)
+                ) {
+                    Icon(Icons.Filled.GridView, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(stringResource(R.string.home_grid))
+                }
+                Button(
+                    onClick = { onStartSorting(selectedAlbum, newestFirst, screenshotsFirst) },
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier.weight(1f).height(56.dp)
+                ) {
+                    Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(stringResource(R.string.home_start))
+                }
             }
             Spacer(Modifier.height(20.dp))
             }
         }
+    }
+}
+
+@Composable
+private fun ScreenshotsFirstToggle(checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable { onChange(!checked) }
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            stringResource(R.string.home_screenshots_first),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f)
+        )
+        Switch(checked = checked, onCheckedChange = onChange)
     }
 }
 
