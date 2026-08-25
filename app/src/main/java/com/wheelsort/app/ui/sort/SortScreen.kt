@@ -8,14 +8,11 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.animate
-import androidx.compose.animation.core.calculateTargetValue
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.rememberSplineBasedDecay
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -60,7 +57,6 @@ import com.wheelsort.app.util.formatDuration
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.pow
-import kotlin.math.roundToInt
 
 private enum class SortPhase { LOADING, COMPLETE, WHEEL }
 
@@ -315,7 +311,6 @@ private fun WheelCarousel(
     val verticalOffset = remember { Animatable(0f) }
     var slotHeightPx by remember { mutableFloatStateOf(1f) }
     var containerHeightPx by remember { mutableFloatStateOf(1f) }
-    val decay = rememberSplineBasedDecay<Float>()
     val peekPx = with(density) { PEEK_DP.dp.toPx() }
 
     // pointerInput(Unit) keeps the same gesture coroutine alive across recompositions, so
@@ -434,13 +429,22 @@ private fun WheelCarousel(
                     scope.launch {
                         val state = latestState.value
                         val slot = slotHeightPx.coerceAtLeast(1f)
-                        val decayTarget = decay.calculateTargetValue(
-                            Float.VectorConverter, verticalOffset.value, velocity
-                        )
-                        var steps = (-decayTarget / slot).roundToInt()
+                        val commitDistance = slot * SwipeTuning.WHEEL_COMMIT_DISTANCE_FRACTION
+
+                        // Exactly one photo per gesture, always - a fast fling used to compute a
+                        // multi-photo jump and animate straight to that distant target, but only
+                        // the original 5 nearby cards ever existed, so the intermediate photos
+                        // were never rendered at all: the wheel looked frozen, then the whole
+                        // visible set swapped at once. Capping to one step means every swipe shows
+                        // the same real, always-visible center-recedes/next-grows transition.
+                        val step = when {
+                            abs(verticalOffset.value) > commitDistance -> if (verticalOffset.value < 0f) 1 else -1
+                            abs(velocity) > SwipeTuning.WHEEL_FLING_VELOCITY_PX_PER_SEC -> if (velocity < 0f) 1 else -1
+                            else -> 0
+                        }
                         val maxForward = (state.photos.size - 1 - state.currentIndex).coerceAtLeast(0)
                         val maxBackward = state.currentIndex.coerceAtLeast(0)
-                        steps = steps.coerceIn(-maxBackward, maxForward)
+                        val steps = step.coerceIn(-maxBackward, maxForward)
 
                         if (steps != 0) {
                             // Commit the index change FIRST, and simultaneously shift the offset by
