@@ -7,12 +7,15 @@ import androidx.lifecycle.viewModelScope
 import com.wheelsort.app.data.Photo
 import com.wheelsort.app.data.PhotoRepository
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 enum class SwipeAction { KEEP, DELETE }
 
@@ -47,6 +50,9 @@ private const val WARM_SIZE_PX = 900
 /** How many photos ahead to eagerly warm - covers a very long browsing session for most libraries. */
 private const val WARM_CAP = 600
 
+/** Concurrent warm workers - one-at-a-time was too slow to stay ahead of normal scroll speed. */
+private const val WARM_PARALLELISM = 4
+
 class SortViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository = PhotoRepository(application)
@@ -78,13 +84,21 @@ class SortViewModel(application: Application) : AndroidViewModel(application) {
      * part of loading a photo is Android generating its thumbnail the first time anyone asks for
      * it - once that's done it's cheap forever. Warming ahead of where the user is browsing means
      * that cost happens invisibly in the background instead of as a stutter when they scroll there.
+     * Runs [WARM_PARALLELISM] photos at once rather than strictly one-at-a-time - a single
+     * sequential pass was too slow to stay ahead of normal scroll speed on larger libraries.
      */
-    private suspend fun warmThumbnailCache(photos: List<Photo>) {
+    private suspend fun warmThumbnailCache(photos: List<Photo>) = coroutineScope {
         val cap = photos.size.coerceAtMost(WARM_CAP)
-        for (i in 0 until cap) {
-            currentCoroutineContext().ensureActive()
-            repository.warmThumbnail(photos[i], WARM_SIZE_PX)
+        val semaphore = Semaphore(WARM_PARALLELISM)
+        val jobs = (0 until cap).map { i ->
+            launch {
+                semaphore.withPermit {
+                    currentCoroutineContext().ensureActive()
+                    repository.warmThumbnail(photos[i], WARM_SIZE_PX)
+                }
+            }
         }
+        jobs.forEach { it.join() }
     }
 
     /**

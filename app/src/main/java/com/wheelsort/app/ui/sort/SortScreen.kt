@@ -39,7 +39,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.painter.ColorPainter
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -51,7 +50,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.lerp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import coil.compose.AsyncImage
 import coil.imageLoader
 import coil.request.ImageRequest
 import com.wheelsort.app.R
@@ -249,9 +247,9 @@ private fun SessionCompleteState(reviewed: Int, freedBytes: Long, onBack: () -> 
 /** Only prev/current/next are rendered - simpler, calmer, and cuts decode load significantly. */
 private const val VISIBLE_RADIUS = 1
 private const val PHOTO_REQUEST_PX = 900
-private const val MIN_SCALE = 0.60f
-private const val MIN_ALPHA = 0.5f
-private const val SLOT_SPACING_FRACTION = 0.40f
+private const val MIN_SCALE = 0.90f
+private const val MIN_ALPHA = 0.55f
+private const val SLOT_SPACING_FRACTION = 0.13f
 private val KEEP_COLOR = com.wheelsort.app.ui.theme.ActionKeep
 private val DELETE_COLOR = com.wheelsort.app.ui.theme.ActionDelete
 private val NEUTRAL_SHADOW = Color.Black.copy(alpha = 0.32f)
@@ -451,37 +449,41 @@ private fun WheelCarousel(
             val photo = photos.getOrNull(i) ?: continue
             val isDraggable = slot == activeSwipeSlot
 
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth(0.84f)
-                    .fillMaxHeight(0.42f)
-                    .graphicsLayer {
-                        // Everything here reads live animated/drag state directly at draw-time,
-                        // so the wheel spinning does NOT trigger recomposition every frame - only
-                        // the render layer's transform updates, which is what makes this smooth.
-                        val signedDistance = slot + verticalOffset.value / slotHeightPx.coerceAtLeast(1f)
-                        val spacing = containerHeightPx * SLOT_SPACING_FRACTION
-                        val dragMag = (abs(dragState.offsetX) / dragState.widthPx.coerceAtLeast(1f)).coerceIn(0f, 1f)
-                        val dim = if (isDraggable) 1f else 1f - dragMag * 0.45f
-                        val scale = slotScale(signedDistance)
+            key(slot) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(0.84f)
+                        .fillMaxHeight(0.42f)
+                        .onGloballyPositioned { if (isDraggable) dragState.widthPx = it.size.width.toFloat() }
+                        .graphicsLayer {
+                            // Everything here reads live animated/drag state directly at draw-time,
+                            // so the wheel spinning does NOT trigger recomposition every frame - only
+                            // the render layer's transform updates, which is what makes this smooth.
+                            val signedDistance = slot + verticalOffset.value / slotHeightPx.coerceAtLeast(1f)
+                            val spacing = containerHeightPx * SLOT_SPACING_FRACTION
+                            val dragMag = (abs(dragState.offsetX) / dragState.widthPx.coerceAtLeast(1f)).coerceIn(0f, 1f)
+                            val dim = if (isDraggable) 1f else 1f - dragMag * 0.45f
+                            val scale = slotScale(signedDistance)
 
-                        translationY = slotTranslationY(signedDistance, spacing)
-                        scaleX = scale
-                        scaleY = scale
-                        alpha = slotAlpha(signedDistance) * dim
-                    }
-            ) {
-                if (isDraggable) {
-                    SwipeableCard(dragState = dragState, modifier = Modifier.fillMaxSize()) {
-                        PhotoCard(
-                            photo = photo,
-                            modifier = Modifier.fillMaxSize(),
-                            glowColor = if (dragProgress > 0.02f) dragDirectionColor else null,
-                            glowStrength = dragProgress
-                        )
-                    }
-                } else {
-                    PhotoCard(photo = photo, modifier = Modifier.fillMaxSize())
+                            translationY = slotTranslationY(signedDistance, spacing)
+                            if (isDraggable) {
+                                translationX = dragState.offsetX
+                                rotationZ = (dragState.offsetX / 38f).coerceIn(-16f, 16f)
+                            }
+                            scaleX = scale
+                            scaleY = scale
+                            alpha = slotAlpha(signedDistance) * dim
+                        }
+                ) {
+                    // PhotoCard is always called the same way here (never conditionally wrapped) -
+                    // that structural stability is what lets its internal crossfade state survive
+                    // across photo changes instead of being torn down and recreated.
+                    PhotoCard(
+                        photo = photo,
+                        modifier = Modifier.fillMaxSize(),
+                        glowColor = if (isDraggable && dragProgress > 0.02f) dragDirectionColor else null,
+                        glowStrength = if (isDraggable) dragProgress else 0f
+                    )
                 }
             }
         }
@@ -590,7 +592,6 @@ private fun PhotoCard(
     glowColor: Color? = null,
     glowStrength: Float = 0f
 ) {
-    val context = LocalContext.current
     val shadowColor = if (glowColor != null) glowColor.copy(alpha = 0.85f) else NEUTRAL_SHADOW
     val elevation = lerp(8.dp, 26.dp, glowStrength.coerceIn(0f, 1f))
 
@@ -605,16 +606,11 @@ private fun PhotoCard(
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Box {
-            AsyncImage(
-                model = ImageRequest.Builder(context)
-                    .data(photo.uri)
-                    .size(PHOTO_REQUEST_PX)
-                    .crossfade(120)
-                    .build(),
+            CrossfadeThumbnail(
+                uri = photo.uri,
                 contentDescription = photo.displayName,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop,
-                placeholder = ColorPainter(MaterialTheme.colorScheme.surfaceVariant)
+                sizePx = PHOTO_REQUEST_PX,
+                modifier = Modifier.fillMaxSize()
             )
             if (photo.isVideo) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -648,6 +644,47 @@ private fun PhotoCard(
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * Coil's AsyncImage resets to its placeholder the instant `model` changes, even if the new image
+ * is already cached - which reads as a visible flash/blink every time the wheel moves to a new
+ * photo. This keeps the LAST successfully loaded image visible (remembered per call-site, so it's
+ * tied to this slot's stable identity via the key(slot) at the call site) until the next one is
+ * actually ready, then swaps - so there's never a blank frame between photos.
+ */
+@Composable
+private fun CrossfadeThumbnail(
+    uri: android.net.Uri,
+    contentDescription: String?,
+    sizePx: Int,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    var lastPainter by remember { mutableStateOf<androidx.compose.ui.graphics.painter.Painter?>(null) }
+
+    coil.compose.SubcomposeAsyncImage(
+        model = ImageRequest.Builder(context).data(uri).size(sizePx).build(),
+        contentDescription = contentDescription,
+        modifier = modifier,
+        contentScale = ContentScale.Crop
+    ) {
+        val state = painter.state
+        if (state is coil.compose.AsyncImagePainter.State.Success) {
+            lastPainter = state.painter
+        }
+        val toShow = (state as? coil.compose.AsyncImagePainter.State.Success)?.painter ?: lastPainter
+        if (toShow != null) {
+            androidx.compose.foundation.Image(
+                painter = toShow,
+                contentDescription = contentDescription,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+        } else {
+            Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceVariant))
         }
     }
 }
