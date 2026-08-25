@@ -43,6 +43,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
@@ -58,6 +59,7 @@ import com.wheelsort.app.util.formatBytes
 import com.wheelsort.app.util.formatDuration
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+import kotlin.math.pow
 import kotlin.math.roundToInt
 
 private enum class SortPhase { LOADING, COMPLETE, WHEEL }
@@ -116,7 +118,7 @@ fun SortScreen(
     Scaffold(
         topBar = {
             SortTopBar(
-                reviewed = uiState.reviewedCount,
+                currentIndex = uiState.currentIndex,
                 total = uiState.photos.size,
                 onExit = ::handleExit,
                 onUndo = {
@@ -181,7 +183,7 @@ fun SortScreen(
 
 @Composable
 private fun SortTopBar(
-    reviewed: Int,
+    currentIndex: Int,
     total: Int,
     onExit: () -> Unit,
     onUndo: () -> Unit
@@ -193,7 +195,7 @@ private fun SortTopBar(
                     Text(stringResource(R.string.app_name), style = MaterialTheme.typography.titleMedium)
                     if (total > 0) {
                         Text(
-                            stringResource(R.string.sort_progress, (reviewed + 1).coerceAtMost(total), total),
+                            stringResource(R.string.sort_progress, (currentIndex + 1).coerceIn(1, total), total),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -213,7 +215,7 @@ private fun SortTopBar(
         )
         if (total > 0) {
             LinearProgressIndicator(
-                progress = { reviewed / total.toFloat() },
+                progress = { (currentIndex + 1).coerceIn(1, total) / total.toFloat() },
                 modifier = Modifier.fillMaxWidth()
             )
         }
@@ -244,34 +246,41 @@ private fun SessionCompleteState(reviewed: Int, freedBytes: Long, onBack: () -> 
     }
 }
 
-/** Only prev/current/next are rendered - simpler, calmer, and cuts decode load significantly. */
-private const val VISIBLE_RADIUS = 1
+/** More layers now, each shrinking/peeking back - a genuine sense of a continuous stack. */
+private const val VISIBLE_RADIUS = 3
 private const val PHOTO_REQUEST_PX = 900
-private const val MIN_SCALE = 0.90f
-private const val MIN_ALPHA = 0.55f
-private const val SLOT_SPACING_FRACTION = 0.13f
+private const val CARD_HEIGHT_FRACTION = 0.60f
+private const val CARD_WIDTH_FRACTION = 0.86f
+/** How much smaller each successive layer gets, compounding - a real "receding into the stack" look. */
+private const val SHRINK_PER_LEVEL = 0.86f
+/** How much alpha drops per layer, compounding, with a floor so far layers stay faintly visible. */
+private const val ALPHA_PER_LEVEL = 0.80f
+private const val MIN_VISIBLE_ALPHA = 0.18f
+/** The visible sliver each layer shows beyond the one in front of it, in dp - kept small and fixed. */
+private const val PEEK_DP = 20f
 private val KEEP_COLOR = com.wheelsort.app.ui.theme.ActionKeep
 private val DELETE_COLOR = com.wheelsort.app.ui.theme.ActionDelete
 private val NEUTRAL_SHADOW = Color.Black.copy(alpha = 0.32f)
 
-/** Smoothstep - cheap, and gives motion a gentler ease-out than a raw linear mapping. */
-private fun smooth(t: Float): Float {
-    val c = t.coerceIn(0f, 1f)
-    return c * c * (3f - 2f * c)
-}
+private fun levelScale(absDistance: Float): Float = SHRINK_PER_LEVEL.pow(absDistance)
 
-/** Vertical screen position (px, relative to wheel center) for a slot at [signedDistance]. */
-private fun slotTranslationY(signedDistance: Float, spacingPx: Float): Float = signedDistance * spacingPx
+private fun levelAlpha(absDistance: Float): Float =
+    ALPHA_PER_LEVEL.pow(absDistance).coerceAtLeast(MIN_VISIBLE_ALPHA)
 
-/** 1 = dead center (full size), shrinking smoothly as distance grows. */
-private fun slotScale(signedDistance: Float): Float {
-    val closeness = 1f - abs(signedDistance).coerceIn(0f, 1f)
-    return MIN_SCALE + (1f - MIN_SCALE) * smooth(closeness)
-}
-
-private fun slotAlpha(signedDistance: Float): Float {
-    val closeness = 1f - abs(signedDistance).coerceIn(0f, 1f)
-    return MIN_ALPHA + (1f - MIN_ALPHA) * smooth(closeness)
+/**
+ * Center-Y position (px) for a card at [signedDistance] slots from center, given the base
+ * (center-card) height and the fixed peek amount. Built from *edges*, not just translation, so
+ * each layer is guaranteed to peek out by exactly [peekPx] beyond the layer in front of it -
+ * never fully hidden, and never overlapping into the messy semi-transparent blend a naive
+ * fixed-fraction offset produces once cards shrink by different amounts.
+ */
+private fun slotCenterY(signedDistance: Float, baseHeightPx: Float, peekPx: Float): Float {
+    val absD = abs(signedDistance)
+    val scale = levelScale(absD)
+    // Distance from center to this layer's near edge if it were just touching the layer in
+    // front (zero overlap, zero gap), plus the deliberate peek beyond that.
+    val centerMagnitude = baseHeightPx / 2f + absD * peekPx - baseHeightPx * scale / 2f
+    return if (signedDistance >= 0f) centerMagnitude else -centerMagnitude
 }
 
 /**
@@ -295,12 +304,14 @@ private fun WheelCarousel(
     val photos = uiState.photos
     val currentIndex = uiState.currentIndex
     val context = LocalContext.current
+    val density = LocalDensity.current
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
     val verticalOffset = remember { Animatable(0f) }
     var slotHeightPx by remember { mutableFloatStateOf(1f) }
     var containerHeightPx by remember { mutableFloatStateOf(1f) }
     val decay = rememberSplineBasedDecay<Float>()
+    val peekPx = with(density) { PEEK_DP.dp.toPx() }
 
     // pointerInput(Unit) keeps the same gesture coroutine alive across recompositions, so
     // callbacks inside it must read state through this rather than closing over `photos` /
@@ -341,20 +352,20 @@ private fun WheelCarousel(
                 .background(dragDirectionColor.copy(alpha = dragProgress * 0.38f))
                 .onGloballyPositioned {
                     containerHeightPx = it.size.height.toFloat()
-                    slotHeightPx = it.size.height * 0.30f
+                    slotHeightPx = it.size.height * 0.22f
                 }
                 .wheelSortGesture(
                     onDown = { position ->
                         val state = latestState.value
                     val slotPx = slotHeightPx.coerceAtLeast(1f)
-                    val spacing = containerHeightPx * SLOT_SPACING_FRACTION
+                    val baseHeightPx = containerHeightPx * CARD_HEIGHT_FRACTION
                     val touchFromCenter = position.y - containerHeightPx / 2f
                     var bestSlot = 0
                     var bestDist = Float.MAX_VALUE
                     for (candidate in -VISIBLE_RADIUS..VISIBLE_RADIUS) {
                         if (state.photos.getOrNull(state.currentIndex + candidate) == null) continue
                         val signedDistance = candidate + verticalOffset.value / slotPx
-                        val y = slotTranslationY(signedDistance, spacing)
+                        val y = slotCenterY(signedDistance, baseHeightPx, peekPx)
                         val d = abs(touchFromCenter - y)
                         if (d < bestDist) { bestDist = d; bestSlot = candidate }
                     }
@@ -426,10 +437,11 @@ private fun WheelCarousel(
                         val maxBackward = state.currentIndex.coerceAtLeast(0)
                         steps = steps.coerceIn(-maxBackward, maxForward)
                         val settleTarget = -steps * slot
-                        // A touch of overshoot for weight/inertia, but resolves quickly - precise, not floaty.
+                        // Meaningfully slower now - StiffnessMedium settled in under 200ms, which
+                        // is too fast to actually see as motion; this should read as a visible glide.
                         verticalOffset.animateTo(
                             targetValue = settleTarget,
-                            animationSpec = spring(dampingRatio = 0.78f, stiffness = Spring.StiffnessMedium),
+                            animationSpec = spring(dampingRatio = 0.82f, stiffness = Spring.StiffnessLow),
                             initialVelocity = velocity
                         )
                         if (steps != 0) {
@@ -452,27 +464,28 @@ private fun WheelCarousel(
             key(slot) {
                 Box(
                     modifier = Modifier
-                        .fillMaxWidth(0.84f)
-                        .fillMaxHeight(0.42f)
+                        .fillMaxWidth(CARD_WIDTH_FRACTION)
+                        .fillMaxHeight(CARD_HEIGHT_FRACTION)
                         .onGloballyPositioned { if (isDraggable) dragState.widthPx = it.size.width.toFloat() }
                         .graphicsLayer {
                             // Everything here reads live animated/drag state directly at draw-time,
                             // so the wheel spinning does NOT trigger recomposition every frame - only
                             // the render layer's transform updates, which is what makes this smooth.
                             val signedDistance = slot + verticalOffset.value / slotHeightPx.coerceAtLeast(1f)
-                            val spacing = containerHeightPx * SLOT_SPACING_FRACTION
+                            val baseHeightPx = containerHeightPx * CARD_HEIGHT_FRACTION
                             val dragMag = (abs(dragState.offsetX) / dragState.widthPx.coerceAtLeast(1f)).coerceIn(0f, 1f)
                             val dim = if (isDraggable) 1f else 1f - dragMag * 0.45f
-                            val scale = slotScale(signedDistance)
+                            val absD = abs(signedDistance)
+                            val scale = levelScale(absD)
 
-                            translationY = slotTranslationY(signedDistance, spacing)
+                            translationY = slotCenterY(signedDistance, baseHeightPx, peekPx)
                             if (isDraggable) {
                                 translationX = dragState.offsetX
                                 rotationZ = (dragState.offsetX / 38f).coerceIn(-16f, 16f)
                             }
                             scaleX = scale
                             scaleY = scale
-                            alpha = slotAlpha(signedDistance) * dim
+                            alpha = levelAlpha(absD) * dim
                         }
                 ) {
                     // PhotoCard is always called the same way here (never conditionally wrapped) -
