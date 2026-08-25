@@ -246,33 +246,38 @@ private fun SessionCompleteState(reviewed: Int, freedBytes: Long, onBack: () -> 
     }
 }
 
-/** More layers now, each shrinking/peeking back - a genuine sense of a continuous stack. */
-private const val VISIBLE_RADIUS = 3
+/** Center card plus 2 peeking behind on each side - enough to read as a stack, few enough to stay clean. */
+private const val VISIBLE_RADIUS = 2
 private const val PHOTO_REQUEST_PX = 900
-private const val CARD_HEIGHT_FRACTION = 0.60f
+private const val CARD_HEIGHT_FRACTION = 0.58f
 private const val CARD_WIDTH_FRACTION = 0.86f
 /** How much smaller each successive layer gets, compounding - a real "receding into the stack" look. */
-private const val SHRINK_PER_LEVEL = 0.86f
-/** How much alpha drops per layer, compounding, with a floor so far layers stay faintly visible. */
-private const val ALPHA_PER_LEVEL = 0.80f
-private const val MIN_VISIBLE_ALPHA = 0.18f
-/** The visible sliver each layer shows beyond the one in front of it, in dp - kept small and fixed. */
-private const val PEEK_DP = 20f
+private const val SHRINK_PER_LEVEL = 0.90f
+/**
+ * How much each back layer is DARKENED (not made transparent). Transparency was the bug behind the
+ * "triple exposure" look - a faded card doesn't hide the cards behind it, it reveals them, so 5+
+ * translucent photos blended into each other. Cards are now fully opaque and recede via a dark
+ * scrim drawn on top of them instead, so each one properly occludes the ones further back.
+ */
+private const val DIM_PER_LEVEL = 0.22f
+private const val MAX_DIM = 0.62f
+/** The visible sliver each layer shows beyond the one in front of it, in dp. */
+private const val PEEK_DP = 26f
 private val KEEP_COLOR = com.wheelsort.app.ui.theme.ActionKeep
 private val DELETE_COLOR = com.wheelsort.app.ui.theme.ActionDelete
 private val NEUTRAL_SHADOW = Color.Black.copy(alpha = 0.32f)
 
 private fun levelScale(absDistance: Float): Float = SHRINK_PER_LEVEL.pow(absDistance)
 
-private fun levelAlpha(absDistance: Float): Float =
-    ALPHA_PER_LEVEL.pow(absDistance).coerceAtLeast(MIN_VISIBLE_ALPHA)
+/** Strength of the dark scrim over a back layer - 0 at center, increasing with depth. */
+private fun levelDim(absDistance: Float): Float =
+    (absDistance * DIM_PER_LEVEL).coerceIn(0f, MAX_DIM)
 
 /**
  * Center-Y position (px) for a card at [signedDistance] slots from center, given the base
  * (center-card) height and the fixed peek amount. Built from *edges*, not just translation, so
  * each layer is guaranteed to peek out by exactly [peekPx] beyond the layer in front of it -
- * never fully hidden, and never overlapping into the messy semi-transparent blend a naive
- * fixed-fraction offset produces once cards shrink by different amounts.
+ * never fully hidden, and never overlapping into a messy pile.
  */
 private fun slotCenterY(signedDistance: Float, baseHeightPx: Float, peekPx: Float): Float {
     val absD = abs(signedDistance)
@@ -324,12 +329,12 @@ private fun WheelCarousel(
     // currentIndex happens to be" - fixes swiping the wrong photo when the wheel is still settling.
     var activeSwipeSlot by remember { mutableIntStateOf(0) }
 
-    // Warm the cache a few photos ahead in both directions, at the EXACT same request size
-    // PhotoCard displays at - a mismatched preload size is a cache miss in disguise, which was
-    // the real reason scrolling still felt laggy even with preloading in place before.
+    // Keep this window tight. The wider background warm pass (in the ViewModel, on its own
+    // low-priority thread) handles looking further ahead; enqueueing a large batch here floods
+    // Coil's IO pool and competes with the photo the user is actually waiting to see.
     LaunchedEffect(currentIndex, photos) {
         val loader = context.imageLoader
-        val range = (currentIndex - VISIBLE_RADIUS - 8)..(currentIndex + VISIBLE_RADIUS + 8)
+        val range = (currentIndex - VISIBLE_RADIUS - 1)..(currentIndex + VISIBLE_RADIUS + 2)
         for (i in range) {
             val p = photos.getOrNull(i) ?: continue
             loader.enqueue(ImageRequest.Builder(context).data(p.uri).size(PHOTO_REQUEST_PX).build())
@@ -436,18 +441,24 @@ private fun WheelCarousel(
                         val maxForward = (state.photos.size - 1 - state.currentIndex).coerceAtLeast(0)
                         val maxBackward = state.currentIndex.coerceAtLeast(0)
                         steps = steps.coerceIn(-maxBackward, maxForward)
-                        val settleTarget = -steps * slot
-                        // Meaningfully slower now - StiffnessMedium settled in under 200ms, which
-                        // is too fast to actually see as motion; this should read as a visible glide.
+
+                        if (steps != 0) {
+                            // Commit the index change FIRST, and simultaneously shift the offset by
+                            // the same amount in the opposite direction. Net visual position is
+                            // unchanged at this instant - but now slot 0 holds the photo we're
+                            // travelling TO, so animating the offset to zero physically moves that
+                            // new photo into the center. Previously we animated first and swapped
+                            // the index afterwards, which meant the animation moved stale content
+                            // and the actual photo change happened as an instant one-frame jump.
+                            onNavigateDelta(steps)
+                            verticalOffset.snapTo(verticalOffset.value + steps * slot)
+                        }
+
                         verticalOffset.animateTo(
-                            targetValue = settleTarget,
+                            targetValue = 0f,
                             animationSpec = spring(dampingRatio = 0.82f, stiffness = Spring.StiffnessLow),
                             initialVelocity = velocity
                         )
-                        if (steps != 0) {
-                            onNavigateDelta(steps)
-                        }
-                        verticalOffset.snapTo(0f)
                     }
                 }
             ),
@@ -462,6 +473,9 @@ private fun WheelCarousel(
             val isDraggable = slot == activeSwipeSlot
 
             key(slot) {
+                // Read once per composition for the scrim; the transform below still reads live
+                // state at draw-time so the wheel itself stays recomposition-free while spinning.
+                val staticDistance = abs(slot.toFloat())
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(CARD_WIDTH_FRACTION)
@@ -473,8 +487,6 @@ private fun WheelCarousel(
                             // the render layer's transform updates, which is what makes this smooth.
                             val signedDistance = slot + verticalOffset.value / slotHeightPx.coerceAtLeast(1f)
                             val baseHeightPx = containerHeightPx * CARD_HEIGHT_FRACTION
-                            val dragMag = (abs(dragState.offsetX) / dragState.widthPx.coerceAtLeast(1f)).coerceIn(0f, 1f)
-                            val dim = if (isDraggable) 1f else 1f - dragMag * 0.45f
                             val absD = abs(signedDistance)
                             val scale = levelScale(absD)
 
@@ -485,7 +497,9 @@ private fun WheelCarousel(
                             }
                             scaleX = scale
                             scaleY = scale
-                            alpha = levelAlpha(absD) * dim
+                            // Deliberately NOT fading here - fully opaque cards occlude the ones
+                            // behind them. Depth is conveyed by the scrim inside PhotoCard instead.
+                            alpha = 1f
                         }
                 ) {
                     // PhotoCard is always called the same way here (never conditionally wrapped) -
@@ -495,7 +509,8 @@ private fun WheelCarousel(
                         photo = photo,
                         modifier = Modifier.fillMaxSize(),
                         glowColor = if (isDraggable && dragProgress > 0.02f) dragDirectionColor else null,
-                        glowStrength = if (isDraggable) dragProgress else 0f
+                        glowStrength = if (isDraggable) dragProgress else 0f,
+                        dimAmount = levelDim(staticDistance)
                     )
                 }
             }
@@ -597,13 +612,17 @@ private fun TrashBinButton(pendingCount: Int, onClick: () -> Unit, modifier: Mod
  * preload pass above warms the cache with - a mismatched size here would silently defeat the
  * preload (different size = different cache entry = cache miss). The centered card gets an
  * optional colored glow shadow instead of a flat screen-wide tint.
+ *
+ * [dimAmount] darkens back-layer cards via an opaque scrim rather than by reducing alpha - a
+ * translucent card would let the cards behind it show through and blend into an unreadable pile.
  */
 @Composable
 private fun PhotoCard(
     photo: Photo,
     modifier: Modifier = Modifier,
     glowColor: Color? = null,
-    glowStrength: Float = 0f
+    glowStrength: Float = 0f,
+    dimAmount: Float = 0f
 ) {
     val shadowColor = if (glowColor != null) glowColor.copy(alpha = 0.85f) else NEUTRAL_SHADOW
     val elevation = lerp(8.dp, 26.dp, glowStrength.coerceIn(0f, 1f))
@@ -616,6 +635,8 @@ private fun PhotoCard(
             spotColor = shadowColor
         ),
         shape = RoundedCornerShape(24.dp),
+        // Fully opaque surface so this card hides whatever is stacked behind it.
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Box {
@@ -625,6 +646,13 @@ private fun PhotoCard(
                 sizePx = PHOTO_REQUEST_PX,
                 modifier = Modifier.fillMaxSize()
             )
+            if (dimAmount > 0f) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = dimAmount.coerceIn(0f, 1f)))
+                )
+            }
             if (photo.isVideo) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Box(
