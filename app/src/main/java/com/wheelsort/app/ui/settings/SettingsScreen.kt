@@ -2,8 +2,6 @@ package com.wheelsort.app.ui.settings
 
 import android.content.Intent
 import android.net.Uri
-import android.os.Build
-import android.provider.MediaStore
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -110,12 +108,6 @@ private fun PermissionSection() {
         hasAccess = hasMediaAccess(context)
         isPartial = hasPartialMediaAccess(context)
     }
-    val selectMoreLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) {
-        hasAccess = hasMediaAccess(context)
-        isPartial = hasPartialMediaAccess(context)
-    }
 
     Column(modifier = Modifier.padding(vertical = 12.dp)) {
         SectionHeader("Photo access")
@@ -143,13 +135,13 @@ private fun PermissionSection() {
                     Text("Grant access")
                 }
             }
-            if (isPartial && Build.VERSION.SDK_INT >= 34) {
-                OutlinedButton(onClick = {
-                    val intent = Intent(MediaStore.ACTION_USER_SELECT_IMAGES_FOR_APP).apply {
-                        putExtra(Intent.EXTRA_PACKAGE_NAME, context.packageName)
-                    }
-                    selectMoreLauncher.launch(intent)
-                }) {
+            if (isPartial) {
+                // Re-requesting the same permission(s) when partial access is already granted
+                // re-opens the system's selection dialog with previous picks pre-selected -
+                // that's the documented way to add more photos, and it reuses the same launcher
+                // already proven to work above, rather than a separate system intent whose exact
+                // constant isn't available in this project's compileSdk.
+                OutlinedButton(onClick = { permissionLauncher.launch(requiredMediaPermissions()) }) {
                     Text("Add more photos")
                 }
             }
