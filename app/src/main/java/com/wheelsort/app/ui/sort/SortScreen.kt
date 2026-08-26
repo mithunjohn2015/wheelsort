@@ -277,7 +277,13 @@ private fun SessionCompleteState(reviewed: Int, freedBytes: Long, onBack: () -> 
     }
 }
 
-private const val PHOTO_REQUEST_PX = 900
+// 900 was noticeably softer than the center card actually renders at on most modern phones
+// (a card at ~55% of screen height on a 1440x3200-class device is well over 1000px tall).
+// 1280 roughly doubles the pixel area for a real visible sharpness gain, while staying within
+// what MediaStore's pre-generated thumbnail cache typically covers - going much higher risks
+// falling back to a slow full-resolution decode per photo, reintroducing the lag that switching
+// to loadThumbnail() was meant to fix in the first place.
+private const val PHOTO_REQUEST_PX = 1280
 /** How many photos ahead/behind to keep warm in Coil's cache beyond what's on screen. */
 private const val PRELOAD_RADIUS = 6
 private val KEEP_COLOR = com.wheelsort.app.ui.theme.ActionKeep
@@ -513,12 +519,13 @@ private fun WheelCarousel(
 
                                         if (lockedHorizontal) {
                                             change.consume()
-                                            dragOffsetX.snapTo(dragOffsetX.value + (change.position.x - lastX))
+                                            val delta = change.position.x - lastX
+                                            scope.launch { dragOffsetX.snapTo(dragOffsetX.value + delta) }
                                         }
                                         lastX = change.position.x
                                     }
 
-                                    if (lockedHorizontal) commitDrag()
+                                    if (lockedHorizontal) scope.launch { commitDrag() }
                                 }
                             }
                         }

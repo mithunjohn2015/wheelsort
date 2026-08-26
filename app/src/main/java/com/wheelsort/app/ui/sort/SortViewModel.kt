@@ -49,8 +49,10 @@ data class SortUiState(
     val sessionComplete: Boolean = false
 )
 
-/** Request size used for warming the cache, matched to what the wheel actually displays at. */
-private const val WARM_SIZE_PX = 900
+/** Request size used for warming the cache - must exactly match PHOTO_REQUEST_PX in SortScreen.kt,
+ *  or the warm pass caches a differently-sized bitmap than the wheel actually requests, which is
+ *  a cache miss wearing a disguise. */
+private const val WARM_SIZE_PX = 1280
 
 /** How many photos ahead to eagerly warm - covers a very long browsing session for most libraries. */
 private const val WARM_CAP = 900
