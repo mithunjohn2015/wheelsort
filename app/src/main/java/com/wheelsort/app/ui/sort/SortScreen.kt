@@ -339,7 +339,6 @@ private fun WheelCarousel(
     val latestState = rememberUpdatedState(uiState)
 
     val dragOffsetX = remember { Animatable(0f) }
-    var dragWidthPx by remember { mutableFloatStateOf(1f) }
 
     // Single source of truth for "which photo is active" - whichever item is currently nearest
     // the viewport's vertical center. Recomputed only when the underlying scroll state actually
@@ -372,26 +371,126 @@ private fun WheelCarousel(
         }
     }
 
-    val commitDist = dragWidthPx * settings.swipeCommitDistanceFraction
-    val dragProgress = (abs(dragOffsetX.value) / commitDist).coerceIn(0f, 1f)
-    val dragDirectionColor = if (dragOffsetX.value >= 0f) KEEP_COLOR else DELETE_COLOR
     val density = LocalDensity.current
     val itemSpacingPx = with(density) { settings.itemSpacingDp.dp.toPx() }
+    // Read fresh inside the gesture detector below (which is only ever launched once) so that
+    // adjusting a setting live via the in-wheel overlay actually takes effect immediately,
+    // instead of only applying once the pointerInput happened to restart.
+    val latestSettings = rememberUpdatedState(settings)
 
     Box(modifier = Modifier.fillMaxSize()) {
         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background))
         WheelMeshBackground(modifier = Modifier.fillMaxSize())
 
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(dragDirectionColor.copy(alpha = dragProgress * 0.38f))
-        ) {
-            BoxWithConstraints(Modifier.fillMaxSize()) {
-                val itemHeight = maxHeight * settings.cardHeightFraction
-                val itemHeightPx = with(LocalDensity.current) { itemHeight.toPx() }
-                val verticalPadding = ((maxHeight - itemHeight) / 2).coerceAtLeast(0.dp)
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            val itemHeight = maxHeight * settings.cardHeightFraction
+            val itemWidth = maxWidth * settings.cardWidthFraction
+            val itemHeightPx = with(density) { itemHeight.toPx() }
+            // Computed directly from layout constraints rather than measured off whichever card
+            // happened to be centered - that measurement is what used to make swipe commit
+            // distance depend on a specific item's pointerInput having already run once.
+            val itemWidthPx = with(density) { itemWidth.toPx() }
+            val verticalPadding = ((maxHeight - itemHeight) / 2).coerceAtLeast(0.dp)
+            val latestItemWidthPx = rememberUpdatedState(itemWidthPx)
+            val latestItemHeightPx = rememberUpdatedState(itemHeightPx)
 
+            val commitDist = (itemWidthPx * settings.swipeCommitDistanceFraction).coerceAtLeast(1f)
+            val dragProgress = (abs(dragOffsetX.value) / commitDist).coerceIn(0f, 1f)
+            val dragDirectionColor = if (dragOffsetX.value >= 0f) KEEP_COLOR else DELETE_COLOR
+
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(dragDirectionColor.copy(alpha = dragProgress * 0.38f))
+                    // A SINGLE gesture detector, permanently attached here rather than
+                    // conditionally attached to whichever item happens to be centered. That
+                    // conditional attachment was the actual bug: a freshly-centered item's
+                    // detector needs a brand new touch-down to start working, so any swipe
+                    // attempted in the moment right after landing on a photo - especially after
+                    // a fast flick, where the target keeps changing until the fling settles -
+                    // fell through to the list's own vertical scroll instead, with no horizontal
+                    // detector yet in place to claim it. This detector always exists, so it's
+                    // always ready the instant you touch down, and looks up whichever photo is
+                    // CURRENTLY centered at gesture-time rather than baking in a specific one.
+                    .pointerInput(Unit) {
+                        val velocityTracker = VelocityTracker()
+                        coroutineScope {
+                            launch {
+                                detectTapGestures(onTap = {
+                                    latestState.value.photos.getOrNull(centeredIndex)?.let(onTapCenter)
+                                })
+                            }
+                            launch {
+                                detectHorizontalDragGestures(
+                                    onDragStart = { velocityTracker.resetTracking() },
+                                    onDragCancel = {
+                                        val s = latestSettings.value
+                                        scope.launch {
+                                            dragOffsetX.animateTo(
+                                                0f,
+                                                spring(dampingRatio = s.snapDamping, stiffness = s.snapStiffness)
+                                            )
+                                        }
+                                    },
+                                    onDragEnd = {
+                                        val photo = latestState.value.photos.getOrNull(centeredIndex)
+                                            ?: return@detectHorizontalDragGestures
+                                        val s = latestSettings.value
+                                        val widthPx = latestItemWidthPx.value
+                                        val velocity = velocityTracker.calculateVelocity().x
+                                        val dist = widthPx * s.swipeCommitDistanceFraction
+                                        val right = dragOffsetX.value > dist ||
+                                            (dragOffsetX.value > 0f && velocity > s.swipeCommitVelocity)
+                                        val left = dragOffsetX.value < -dist ||
+                                            (dragOffsetX.value < 0f && velocity < -s.swipeCommitVelocity)
+                                        when {
+                                            right -> {
+                                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                scope.launch {
+                                                    dragOffsetX.animateTo(
+                                                        targetValue = widthPx * 1.4f,
+                                                        animationSpec = tween(190, easing = FastOutLinearInEasing)
+                                                    )
+                                                    dragOffsetX.snapTo(0f)
+                                                }
+                                                scope.launch { listState.animateScrollBy(latestItemHeightPx.value) }
+                                                onCommitKeep(photo)
+                                            }
+                                            left -> {
+                                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                scope.launch {
+                                                    dragOffsetX.animateTo(
+                                                        targetValue = -widthPx * 1.4f,
+                                                        animationSpec = tween(190, easing = FastOutLinearInEasing)
+                                                    )
+                                                    dragOffsetX.snapTo(0f)
+                                                }
+                                                // Deleting removes the photo from the list, which shifts
+                                                // every later index down by one - the item that was next
+                                                // naturally reflows into this same visual position, so no
+                                                // explicit scroll is needed here (unlike the keep case).
+                                                onCommitDelete(photo)
+                                            }
+                                            else -> {
+                                                scope.launch {
+                                                    dragOffsetX.animateTo(
+                                                        0f,
+                                                        spring(dampingRatio = s.snapDamping, stiffness = s.snapStiffness)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    },
+                                    onHorizontalDrag = { change, dragAmount ->
+                                        change.consume()
+                                        velocityTracker.addPointerInputChange(change)
+                                        scope.launch { dragOffsetX.snapTo(dragOffsetX.value + dragAmount) }
+                                    }
+                                )
+                            }
+                        }
+                    }
+            ) {
                 LazyColumn(
                     state = listState,
                     flingBehavior = flingBehavior,
@@ -424,84 +523,6 @@ private fun WheelCarousel(
                                         rotationZ = (dragOffsetX.value / 38f).coerceIn(-16f, 16f)
                                     }
                                 }
-                                .then(
-                                    if (isCentered) {
-                                        Modifier.pointerInput(photo.id) {
-                                            dragWidthPx = size.width.toFloat()
-                                            val velocityTracker = VelocityTracker()
-                                            coroutineScope {
-                                                launch {
-                                                    detectTapGestures(onTap = { onTapCenter(photo) })
-                                                }
-                                                launch {
-                                                    detectHorizontalDragGestures(
-                                                        onDragStart = { velocityTracker.resetTracking() },
-                                                        onDragCancel = {
-                                                            scope.launch {
-                                                                dragOffsetX.animateTo(
-                                                                    0f,
-                                                                    spring(dampingRatio = settings.snapDamping, stiffness = settings.snapStiffness)
-                                                                )
-                                                            }
-                                                        },
-                                                        onDragEnd = {
-                                                            val velocity = velocityTracker.calculateVelocity().x
-                                                            val dist = dragWidthPx * settings.swipeCommitDistanceFraction
-                                                            val right = dragOffsetX.value > dist ||
-                                                                (dragOffsetX.value > 0f && velocity > settings.swipeCommitVelocity)
-                                                            val left = dragOffsetX.value < -dist ||
-                                                                (dragOffsetX.value < 0f && velocity < -settings.swipeCommitVelocity)
-                                                            when {
-                                                                right -> {
-                                                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                                                    scope.launch {
-                                                                        dragOffsetX.animateTo(
-                                                                            targetValue = dragWidthPx * 1.4f,
-                                                                            animationSpec = tween(190, easing = FastOutLinearInEasing)
-                                                                        )
-                                                                        dragOffsetX.snapTo(0f)
-                                                                    }
-                                                                    scope.launch { listState.animateScrollBy(itemHeightPx) }
-                                                                    onCommitKeep(photo)
-                                                                }
-                                                                left -> {
-                                                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                                                    scope.launch {
-                                                                        dragOffsetX.animateTo(
-                                                                            targetValue = -dragWidthPx * 1.4f,
-                                                                            animationSpec = tween(190, easing = FastOutLinearInEasing)
-                                                                        )
-                                                                        dragOffsetX.snapTo(0f)
-                                                                    }
-                                                                    // Deleting removes the photo from the list, which shifts
-                                                                    // every later index down by one - the item that was next
-                                                                    // naturally reflows into this same visual position, so no
-                                                                    // explicit scroll is needed here (unlike the keep case).
-                                                                    onCommitDelete(photo)
-                                                                }
-                                                                else -> {
-                                                                    scope.launch {
-                                                                        dragOffsetX.animateTo(
-                                                                            0f,
-                                                                            spring(dampingRatio = settings.snapDamping, stiffness = settings.snapStiffness)
-                                                                        )
-                                                                    }
-                                                                }
-                                                            }
-                                                        },
-                                                        onHorizontalDrag = { change, dragAmount ->
-                                                            change.consume()
-                                                            velocityTracker.addPointerInputChange(change)
-                                                            scope.launch { dragOffsetX.snapTo(dragOffsetX.value + dragAmount) }
-                                                        }
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    } else {
-                                        Modifier
-                                    }
-                                )
                         ) {
                             PhotoCard(
                                 photo = photo,
