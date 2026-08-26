@@ -245,20 +245,29 @@ private fun SessionCompleteState(reviewed: Int, freedBytes: Long, onBack: () -> 
 /** Center card plus 2 peeking behind on each side - enough to read as a stack, few enough to stay clean. */
 private const val VISIBLE_RADIUS = 2
 private const val PHOTO_REQUEST_PX = 900
-private const val CARD_HEIGHT_FRACTION = 0.58f
-private const val CARD_WIDTH_FRACTION = 0.86f
-/** How much smaller each successive layer gets, compounding - a real "receding into the stack" look. */
-private const val SHRINK_PER_LEVEL = 0.90f
+private const val CARD_HEIGHT_FRACTION = 0.54f
+private const val CARD_WIDTH_FRACTION = 0.84f
+/**
+ * How much smaller each successive layer gets, compounding. Cards are opaque now (see below), so
+ * there's no risk in shrinking back layers substantially - it's what actually reads as depth
+ * rather than "photos in a pile."
+ */
+private const val SHRINK_PER_LEVEL = 0.78f
 /**
  * How much each back layer is DARKENED (not made transparent). Transparency was the bug behind the
- * "triple exposure" look - a faded card doesn't hide the cards behind it, it reveals them, so 5+
- * translucent photos blended into each other. Cards are now fully opaque and recede via a dark
- * scrim drawn on top of them instead, so each one properly occludes the ones further back.
+ * original "triple exposure" look - a faded card doesn't hide the cards behind it, it reveals them.
+ * Cards are fully opaque and recede via a dark scrim drawn on top of them instead, so each one
+ * properly occludes the ones further back regardless of how much they overlap.
  */
-private const val DIM_PER_LEVEL = 0.22f
-private const val MAX_DIM = 0.62f
-/** The visible sliver each layer shows beyond the one in front of it, in dp. */
-private const val PEEK_DP = 26f
+private const val DIM_PER_LEVEL = 0.24f
+private const val MAX_DIM = 0.65f
+/**
+ * The visible sliver each layer shows beyond the one in front of it, in dp. Was 26 - tuned back
+ * when cards still needed near-zero overlap to avoid ghosting. Now that opacity handles occlusion
+ * safely, this can be generous: this is what gives the wheel real room to move instead of every
+ * photo sitting nearly on top of the last one.
+ */
+private const val PEEK_DP = 92f
 private val KEEP_COLOR = com.wheelsort.app.ui.theme.ActionKeep
 private val DELETE_COLOR = com.wheelsort.app.ui.theme.ActionDelete
 private val NEUTRAL_SHADOW = Color.Black.copy(alpha = 0.32f)

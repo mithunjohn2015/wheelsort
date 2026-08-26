@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.util.concurrent.Executors
+import kotlin.math.abs
 
 enum class SwipeAction { KEEP, DELETE }
 
@@ -49,10 +50,13 @@ data class SortUiState(
 private const val WARM_SIZE_PX = 900
 
 /** How many photos ahead to eagerly warm - covers a very long browsing session for most libraries. */
-private const val WARM_CAP = 600
+private const val WARM_CAP = 900
 
 /** Small pause between warms so foreground image loads always win contention for disk/CPU. */
 private const val WARM_PAUSE_MS = 12L
+
+/** How far you can drift from the current warm-up focus before it re-centers on your actual position. */
+private const val REANCHOR_DISTANCE = 40
 
 class SortViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -63,6 +67,7 @@ class SortViewModel(application: Application) : AndroidViewModel(application) {
     private val history = ArrayDeque<HistoryEntry>()
     private val pendingQueue = ArrayDeque<Photo>()
     private var lastFlushBatch: List<Photo> = emptyList()
+    private var warmAnchor = 0
 
     /** Dedicated single thread for cache warming so it can never starve foreground image loads. */
     private val warmDispatcher = Executors.newSingleThreadExecutor { r ->
@@ -89,7 +94,8 @@ class SortViewModel(application: Application) : AndroidViewModel(application) {
                 isLoading = false,
                 sessionComplete = photos.isEmpty()
             )
-            startWarming(photos)
+            warmAnchor = 0
+            startWarming(photos, anchor = 0)
         }
     }
 
@@ -104,18 +110,16 @@ class SortViewModel(application: Application) : AndroidViewModel(application) {
      * produced exactly the recurring ~0.7s stalls seen while scrolling. One dedicated thread plus
      * a small yield between items means warming can never outcompete a foreground load.
      */
-    private fun startWarming(photos: List<Photo>) {
+    private fun startWarming(photos: List<Photo>, anchor: Int) {
         warmJob?.cancel()
         warmJob = viewModelScope.launch(warmDispatcher) {
             val cap = photos.size.coerceAtMost(WARM_CAP)
-            // Warm outward from wherever the user actually is, not always from index 0 - after
-            // scrolling deep into a large library, warming from the start is wasted work.
-            val anchor = _uiState.value.currentIndex.coerceIn(0, (photos.size - 1).coerceAtLeast(0))
+            val safeAnchor = anchor.coerceIn(0, (photos.size - 1).coerceAtLeast(0))
             val order = buildList {
                 for (d in 0 until cap) {
-                    val forward = anchor + d
+                    val forward = safeAnchor + d
                     if (forward < photos.size) add(forward)
-                    val backward = anchor - d - 1
+                    val backward = safeAnchor - d - 1
                     if (backward >= 0) add(backward)
                     if (size >= cap) break
                 }
@@ -176,6 +180,21 @@ class SortViewModel(application: Application) : AndroidViewModel(application) {
         if (steps == 0 || s.photos.isEmpty()) return
         val target = (s.currentIndex + steps).coerceIn(0, s.photos.size - 1)
         _uiState.value = s.copy(currentIndex = target)
+        maybeReanchorWarming(target, s.photos)
+    }
+
+    /**
+     * Warming starts from wherever you are when the screen opens and works outward from there.
+     * On a very large library, fast scrolling can carry you far past that original starting
+     * point before it's caught up - so once you've drifted more than [REANCHOR_DISTANCE] photos
+     * away from where warming is currently focused, restart it centered on where you actually
+     * are now instead of continuing to (slowly) work toward you from the old anchor.
+     */
+    private fun maybeReanchorWarming(currentIndex: Int, photos: List<Photo>) {
+        if (abs(currentIndex - warmAnchor) > REANCHOR_DISTANCE) {
+            warmAnchor = currentIndex
+            startWarming(photos, anchor = currentIndex)
+        }
     }
 
     fun goToNext() = goToDelta(1)
