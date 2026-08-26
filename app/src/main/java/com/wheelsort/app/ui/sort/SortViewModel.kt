@@ -12,8 +12,11 @@ import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.util.concurrent.Executors
@@ -68,6 +71,14 @@ class SortViewModel(application: Application) : AndroidViewModel(application) {
     private val pendingQueue = ArrayDeque<Photo>()
     private var lastFlushBatch: List<Photo> = emptyList()
     private var warmAnchor = 0
+
+    /**
+     * One-shot events for PROGRAMMATIC scroll requests (undo restoring a photo, etc.) - the wheel
+     * itself now owns scroll position via its own list state, driven by the user's own gestures;
+     * this is only for the cases where the ViewModel needs to move it without a gesture involved.
+     */
+    private val _scrollToIndex = MutableSharedFlow<Int>(extraBufferCapacity = 1)
+    val scrollToIndex: SharedFlow<Int> = _scrollToIndex.asSharedFlow()
 
     /** Dedicated single thread for cache warming so it can never starve foreground image loads. */
     private val warmDispatcher = Executors.newSingleThreadExecutor { r ->
@@ -174,13 +185,19 @@ class SortViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
-    /** Jump forward/back by several photos at once (used for fast wheel flings). Clamped to bounds. */
-    fun goToDelta(steps: Int) {
+    /**
+     * Called continuously as the wheel scrolls (the wheel itself now owns the actual scroll
+     * position - this just keeps the ViewModel's notion of "where you are" in sync for the
+     * progress counter, warming, and swipe-target lookups).
+     */
+    fun setCurrentIndex(index: Int) {
         val s = _uiState.value
-        if (steps == 0 || s.photos.isEmpty()) return
-        val target = (s.currentIndex + steps).coerceIn(0, s.photos.size - 1)
-        _uiState.value = s.copy(currentIndex = target)
-        maybeReanchorWarming(target, s.photos)
+        if (s.photos.isEmpty()) return
+        val clamped = index.coerceIn(0, s.photos.size - 1)
+        if (clamped != s.currentIndex) {
+            _uiState.value = s.copy(currentIndex = clamped)
+        }
+        maybeReanchorWarming(clamped, s.photos)
     }
 
     /**
@@ -197,9 +214,6 @@ class SortViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun goToNext() = goToDelta(1)
-    fun goToPrevious() = goToDelta(-1)
-
     /** Undo the last decision. */
     fun undoLast(): HistoryEntry? {
         val last = history.removeLastOrNull() ?: return null
@@ -207,12 +221,14 @@ class SortViewModel(application: Application) : AndroidViewModel(application) {
 
         when (last.action) {
             SwipeAction.KEEP -> {
+                val restoreIndex = (s.currentIndex - 1).coerceAtLeast(0)
                 _uiState.value = s.copy(
-                    currentIndex = (s.currentIndex - 1).coerceAtLeast(0),
+                    currentIndex = restoreIndex,
                     reviewedCount = (s.reviewedCount - 1).coerceAtLeast(0),
                     keptCount = (s.keptCount - 1).coerceAtLeast(0),
                     sessionComplete = false
                 )
+                _scrollToIndex.tryEmit(restoreIndex)
             }
             SwipeAction.DELETE -> {
                 // Splice the photo back into the list exactly where it was removed from.
@@ -231,6 +247,7 @@ class SortViewModel(application: Application) : AndroidViewModel(application) {
                     pendingQueue.remove(last.photo)
                     _uiState.value = _uiState.value.copy(pendingDeleteCount = pendingQueue.size)
                 }
+                _scrollToIndex.tryEmit(restoreIndex)
             }
         }
         return last

@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -48,7 +49,8 @@ fun HomeScreen(
     onOpenOrganize: () -> Unit,
     onOpenBackup: () -> Unit,
     onOpenGrid: (albumFilter: String?) -> Unit,
-    onOpenDuplicates: () -> Unit
+    onOpenDuplicates: () -> Unit,
+    onOpenSettings: () -> Unit
 ) {
     val context = LocalContext.current
     var albums by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -92,6 +94,9 @@ fun HomeScreen(
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                }
+                IconButton(onClick = onOpenSettings, modifier = Modifier.align(Alignment.TopEnd)) {
+                    Icon(Icons.Filled.Tune, contentDescription = "Wheel settings")
                 }
             }
 

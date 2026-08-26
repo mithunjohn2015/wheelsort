@@ -16,7 +16,16 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.snapping.SnapLayoutInfoProvider
+import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -24,6 +33,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -37,6 +47,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
@@ -54,6 +65,7 @@ import com.wheelsort.app.R
 import com.wheelsort.app.data.Photo
 import com.wheelsort.app.util.formatBytes
 import com.wheelsort.app.util.formatDuration
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.pow
@@ -67,11 +79,13 @@ fun SortScreen(
     screenshotsFirst: Boolean = false,
     onExit: () -> Unit,
     onOpenTrash: () -> Unit,
-    viewModel: SortViewModel = viewModel()
+    viewModel: SortViewModel = viewModel(),
+    settingsViewModel: com.wheelsort.app.ui.settings.SettingsViewModel = viewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
-    val dragState = rememberSwipeCardDragState()
+    val wheelSettings by settingsViewModel.settings.collectAsState()
     var viewerPhoto by remember { mutableStateOf<Photo?>(null) }
+    var showSettingsOverlay by remember { mutableStateOf(false) }
 
     var isFlushing by remember { mutableStateOf(false) }
     var afterFlush by remember { mutableStateOf<(() -> Unit)?>(null) }
@@ -117,6 +131,7 @@ fun SortScreen(
                 currentIndex = uiState.currentIndex,
                 total = uiState.photos.size,
                 onExit = ::handleExit,
+                onOpenSettings = { showSettingsOverlay = true },
                 onUndo = {
                     val entry = viewModel.undoLast()
                     if (entry != null && entry.action == SwipeAction.DELETE && entry.flushed) {
@@ -148,10 +163,11 @@ fun SortScreen(
                     )
                     SortPhase.WHEEL -> WheelCarousel(
                         uiState = uiState,
-                        dragState = dragState,
+                        settings = wheelSettings,
+                        scrollToIndexEvents = viewModel.scrollToIndex,
                         onCommitDelete = { photo -> viewModel.queueDelete(photo) },
                         onCommitKeep = { photo -> viewModel.onKeep(photo) },
-                        onNavigateDelta = { steps -> viewModel.goToDelta(steps) },
+                        onCenterIndexChanged = { index -> viewModel.setCurrentIndex(index) },
                         onTapCenter = { photo -> viewerPhoto = photo },
                         onOpenTrash = ::handleOpenTrash,
                         pendingDeleteCount = uiState.pendingDeleteCount
@@ -174,7 +190,20 @@ fun SortScreen(
         )
     }
 
-    BackHandler(onBack = ::handleExit)
+    androidx.compose.animation.AnimatedVisibility(
+        visible = showSettingsOverlay,
+        enter = androidx.compose.animation.fadeIn(tween(180)),
+        exit = androidx.compose.animation.fadeOut(tween(180))
+    ) {
+        com.wheelsort.app.ui.settings.WheelSettingsOverlay(
+            settings = wheelSettings,
+            onUpdate = settingsViewModel::update,
+            onReset = { settingsViewModel.resetToDefaults() },
+            onClose = { showSettingsOverlay = false }
+        )
+    }
+
+    BackHandler(onBack = { if (showSettingsOverlay) showSettingsOverlay = false else handleExit() })
 }
 
 @Composable
@@ -182,6 +211,7 @@ private fun SortTopBar(
     currentIndex: Int,
     total: Int,
     onExit: () -> Unit,
+    onOpenSettings: () -> Unit,
     onUndo: () -> Unit
 ) {
     Column {
@@ -204,6 +234,9 @@ private fun SortTopBar(
                 }
             },
             actions = {
+                IconButton(onClick = onOpenSettings) {
+                    Icon(Icons.Filled.Tune, contentDescription = "Wheel settings")
+                }
                 IconButton(onClick = onUndo) {
                     Icon(Icons.Filled.Undo, contentDescription = stringResource(R.string.sort_undo))
                 }
@@ -242,315 +275,270 @@ private fun SessionCompleteState(reviewed: Int, freedBytes: Long, onBack: () -> 
     }
 }
 
-/** Center card plus 2 peeking behind on each side - enough to read as a stack, few enough to stay clean. */
-private const val VISIBLE_RADIUS = 2
 private const val PHOTO_REQUEST_PX = 900
-private const val CARD_HEIGHT_FRACTION = 0.54f
-private const val CARD_WIDTH_FRACTION = 0.84f
-/**
- * How much smaller each successive layer gets, compounding. Cards are opaque now (see below), so
- * there's no risk in shrinking back layers substantially - it's what actually reads as depth
- * rather than "photos in a pile."
- */
-private const val SHRINK_PER_LEVEL = 0.78f
-/**
- * How much each back layer is DARKENED (not made transparent). Transparency was the bug behind the
- * original "triple exposure" look - a faded card doesn't hide the cards behind it, it reveals them.
- * Cards are fully opaque and recede via a dark scrim drawn on top of them instead, so each one
- * properly occludes the ones further back regardless of how much they overlap.
- */
-private const val DIM_PER_LEVEL = 0.24f
-private const val MAX_DIM = 0.65f
-/**
- * The visible sliver each layer shows beyond the one in front of it, in dp. Was 26 - tuned back
- * when cards still needed near-zero overlap to avoid ghosting. Now that opacity handles occlusion
- * safely, this can be generous: this is what gives the wheel real room to move instead of every
- * photo sitting nearly on top of the last one.
- */
-private const val PEEK_DP = 92f
+/** How many photos ahead/behind to keep warm in Coil's cache beyond what's on screen. */
+private const val PRELOAD_RADIUS = 6
 private val KEEP_COLOR = com.wheelsort.app.ui.theme.ActionKeep
 private val DELETE_COLOR = com.wheelsort.app.ui.theme.ActionDelete
 private val NEUTRAL_SHADOW = Color.Black.copy(alpha = 0.32f)
 
-private fun levelScale(absDistance: Float): Float = SHRINK_PER_LEVEL.pow(absDistance)
+private fun levelScale(distance: Float, shrinkPerLevel: Float): Float = shrinkPerLevel.pow(distance)
+private fun levelDim(distance: Float, dimPerLevel: Float, maxDim: Float): Float =
+    (distance * dimPerLevel).coerceIn(0f, maxDim)
 
-/** Strength of the dark scrim over a back layer - 0 at center, increasing with depth. */
-private fun levelDim(absDistance: Float): Float =
-    (absDistance * DIM_PER_LEVEL).coerceIn(0f, MAX_DIM)
-
-/**
- * Center-Y position (px) for a card at [signedDistance] slots from center, given the base
- * (center-card) height and the fixed peek amount. Built from *edges*, not just translation, so
- * each layer is guaranteed to peek out by exactly [peekPx] beyond the layer in front of it -
- * never fully hidden, and never overlapping into a messy pile.
- */
-private fun slotCenterY(signedDistance: Float, baseHeightPx: Float, peekPx: Float): Float {
-    val absD = abs(signedDistance)
-    val scale = levelScale(absD)
-    // Distance from center to this layer's near edge if it were just touching the layer in
-    // front (zero overlap, zero gap), plus the deliberate peek beyond that.
-    val centerMagnitude = baseHeightPx / 2f + absD * peekPx - baseHeightPx * scale / 2f
-    return if (signedDistance >= 0f) centerMagnitude else -centerMagnitude
+/** Signed: negative above viewport center, positive below - needed to know which direction to push/pull for spacing. */
+private fun centerSignedDistance(listState: LazyListState, index: Int): Float {
+    val info = listState.layoutInfo
+    val itemInfo = info.visibleItemsInfo.find { it.index == index } ?: return 3f
+    if (itemInfo.size <= 0) return 3f
+    val viewportCenter = (info.viewportStartOffset + info.viewportEndOffset) / 2f
+    val itemCenter = itemInfo.offset + itemInfo.size / 2f
+    return (itemCenter - viewportCenter) / itemInfo.size.toFloat()
 }
 
+/** How far (in units of "item heights") a list item currently sits from the viewport's center. */
+private fun centerDistance(listState: LazyListState, index: Int): Float = abs(centerSignedDistance(listState, index))
+
 /**
- * The wheel: the centered photo renders at full size; the previous/next photo shrink and fade
- * continuously as you drag, growing back to full size as they cross through center - a plain,
- * reliable scale animation rather than a 3D-tilted one (which is more prone to rendering glitches
- * on some devices' hardware layers). A fast vertical flick spins through several photos using
- * real release velocity. The centered card glows green/red as you drag it.
+ * The wheel, built directly on Compose's own scrolling/snapping engine instead of a hand-rolled
+ * fixed window of composables. This is what actually fixes the recurring problems rather than
+ * patching around them:
+ *  - "loading in sets": LazyColumn composes whatever's actually near the viewport continuously as
+ *    you scroll - there's no fixed window that has to jump to a new batch.
+ *  - fling distance not matching swipe speed: a fast fling travels further using Compose's real
+ *    fling physics, exactly like scrolling any normal list - slow to fast is all one continuum.
+ *  - "click and stop in the middle": content padding sizes the list so each item naturally centers
+ *    itself when Compose's own snap-to-item behavior settles after a fling.
+ *  - wrong-photo-swiped / z-order bugs: the horizontal keep/delete gesture is only ever attached to
+ *    the ACTUAL centered item's composable - there's no separate "which one did I touch" resolution
+ *    to get wrong, and no draw-order bookkeeping needed, because there's nothing stacked to order.
  */
 @Composable
 private fun WheelCarousel(
     uiState: SortUiState,
-    dragState: SwipeCardDragState,
+    settings: com.wheelsort.app.data.WheelSettings,
+    scrollToIndexEvents: kotlinx.coroutines.flow.Flow<Int>,
     onCommitDelete: (Photo) -> Unit,
     onCommitKeep: (Photo) -> Unit,
-    onNavigateDelta: (Int) -> Unit,
+    onCenterIndexChanged: (Int) -> Unit,
     onTapCenter: (Photo) -> Unit,
     onOpenTrash: () -> Unit,
     pendingDeleteCount: Int
 ) {
     val photos = uiState.photos
-    val currentIndex = uiState.currentIndex
     val context = LocalContext.current
-    val density = LocalDensity.current
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
-    val verticalOffset = remember { Animatable(0f) }
-    var slotHeightPx by remember { mutableFloatStateOf(1f) }
-    var containerHeightPx by remember { mutableFloatStateOf(1f) }
-    val peekPx = with(density) { PEEK_DP.dp.toPx() }
-
-    // pointerInput(Unit) keeps the same gesture coroutine alive across recompositions, so
-    // callbacks inside it must read state through this rather than closing over `photos` /
-    // `currentIndex` directly - otherwise they'd stay frozen at their first-composition values.
+    val listState = rememberLazyListState()
+    val snapLayoutInfo = remember(listState) { SnapLayoutInfoProvider(listState) }
+    val flingBehavior = rememberSnapFlingBehavior(
+        snapLayoutInfo,
+        snapAnimationSpec = spring(dampingRatio = settings.snapDamping, stiffness = settings.snapStiffness)
+    )
     val latestState = rememberUpdatedState(uiState)
 
-    // Which photo is actually under the finger right now - resolved fresh on every touch-down
-    // by comparing the touch position against each visible slot's CURRENT on-screen position
-    // (mid-animation state included). This is what the swipe acts on, not just "whatever
-    // currentIndex happens to be" - fixes swiping the wrong photo when the wheel is still settling.
-    var activeSwipeSlot by remember { mutableIntStateOf(0) }
+    val dragOffsetX = remember { Animatable(0f) }
+    var dragWidthPx by remember { mutableFloatStateOf(1f) }
 
-    // Keep this window tight. The wider background warm pass (in the ViewModel, on its own
-    // low-priority thread) handles looking further ahead; enqueueing a large batch here floods
-    // Coil's IO pool and competes with the photo the user is actually waiting to see.
-    LaunchedEffect(currentIndex, photos) {
+    // Single source of truth for "which photo is active" - whichever item is currently nearest
+    // the viewport's vertical center. Recomputed only when the underlying scroll state actually
+    // changes (derivedStateOf), not on every recomposition.
+    val centeredIndex by remember {
+        derivedStateOf {
+            val info = listState.layoutInfo
+            if (info.visibleItemsInfo.isEmpty()) return@derivedStateOf 0
+            val viewportCenter = (info.viewportStartOffset + info.viewportEndOffset) / 2
+            info.visibleItemsInfo.minByOrNull { abs((it.offset + it.size / 2) - viewportCenter) }?.index ?: 0
+        }
+    }
+
+    LaunchedEffect(centeredIndex) { onCenterIndexChanged(centeredIndex) }
+
+    // Programmatic scroll requests (undo restoring a photo) - separate from the reactive sync
+    // above, which only flows the other direction (user scroll -> ViewModel).
+    LaunchedEffect(Unit) {
+        scrollToIndexEvents.collect { index ->
+            if (photos.indices.contains(index)) listState.animateScrollToItem(index)
+        }
+    }
+
+    LaunchedEffect(centeredIndex, photos) {
         val loader = context.imageLoader
-        val range = (currentIndex - VISIBLE_RADIUS - 1)..(currentIndex + VISIBLE_RADIUS + 2)
+        val range = (centeredIndex - PRELOAD_RADIUS)..(centeredIndex + PRELOAD_RADIUS)
         for (i in range) {
             val p = photos.getOrNull(i) ?: continue
             loader.enqueue(ImageRequest.Builder(context).data(p.uri).size(PHOTO_REQUEST_PX).build())
         }
     }
 
-    val commitDist = dragState.widthPx * SwipeTuning.COMMIT_DISTANCE_FRACTION
-    val dragProgress = (abs(dragState.offsetX) / commitDist).coerceIn(0f, 1f)
-    val dragDirectionColor = if (dragState.offsetX >= 0) KEEP_COLOR else DELETE_COLOR
+    val commitDist = dragWidthPx * settings.swipeCommitDistanceFraction
+    val dragProgress = (abs(dragOffsetX.value) / commitDist).coerceIn(0f, 1f)
+    val dragDirectionColor = if (dragOffsetX.value >= 0f) KEEP_COLOR else DELETE_COLOR
+    val density = LocalDensity.current
+    val itemSpacingPx = with(density) { settings.itemSpacingDp.dp.toPx() }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        // Base + soft colorful gradient-mesh pattern, sitting behind everything else.
         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background))
         WheelMeshBackground(modifier = Modifier.fillMaxSize())
 
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                // Clearly visible now - this is the main swipe-direction feedback.
                 .background(dragDirectionColor.copy(alpha = dragProgress * 0.38f))
-                .onGloballyPositioned {
-                    containerHeightPx = it.size.height.toFloat()
-                    slotHeightPx = it.size.height * 0.22f
-                }
-                .wheelSortGesture(
-                    onDown = { position ->
-                        val state = latestState.value
-                    val slotPx = slotHeightPx.coerceAtLeast(1f)
-                    val baseHeightPx = containerHeightPx * CARD_HEIGHT_FRACTION
-                    val touchFromCenter = position.y - containerHeightPx / 2f
-                    var bestSlot = 0
-                    var bestDist = Float.MAX_VALUE
-                    for (candidate in -VISIBLE_RADIUS..VISIBLE_RADIUS) {
-                        if (state.photos.getOrNull(state.currentIndex + candidate) == null) continue
-                        val signedDistance = candidate + verticalOffset.value / slotPx
-                        val y = slotCenterY(signedDistance, baseHeightPx, peekPx)
-                        val d = abs(touchFromCenter - y)
-                        if (d < bestDist) { bestDist = d; bestSlot = candidate }
-                    }
-                    activeSwipeSlot = bestSlot
-                },
-                onTap = {
-                    val state = latestState.value
-                    state.photos.getOrNull(state.currentIndex + activeSwipeSlot)?.let(onTapCenter)
-                },
-                onHorizontalDrag = { dx -> dragState.offsetX += dx },
-                onHorizontalDragEnd = { velocity ->
-                    val state = latestState.value
-                    val photo = state.photos.getOrNull(state.currentIndex + activeSwipeSlot)
-                    if (photo != null) {
-                        val dist = dragState.widthPx * SwipeTuning.COMMIT_DISTANCE_FRACTION
-                        val right = dragState.offsetX > dist ||
-                            (dragState.offsetX > 0f && velocity > SwipeTuning.COMMIT_VELOCITY_PX_PER_SEC)
-                        val left = dragState.offsetX < -dist ||
-                            (dragState.offsetX < 0f && velocity < -SwipeTuning.COMMIT_VELOCITY_PX_PER_SEC)
-                        when {
-                            right -> scope.launch {
-                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                animate(
-                                    initialValue = dragState.offsetX,
-                                    targetValue = dragState.widthPx * 1.4f,
-                                    initialVelocity = velocity,
-                                    animationSpec = tween(190, easing = FastOutLinearInEasing)
-                                ) { value, _ -> dragState.offsetX = value }
-                                dragState.offsetX = 0f
-                                onCommitKeep(photo)
-                            }
-                            left -> scope.launch {
-                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                animate(
-                                    initialValue = dragState.offsetX,
-                                    targetValue = -dragState.widthPx * 1.4f,
-                                    initialVelocity = velocity,
-                                    animationSpec = tween(190, easing = FastOutLinearInEasing)
-                                ) { value, _ -> dragState.offsetX = value }
-                                dragState.offsetX = 0f
-                                onCommitDelete(photo)
-                            }
-                            else -> scope.launch {
-                                animate(
-                                    initialValue = dragState.offsetX,
-                                    targetValue = 0f,
-                                    initialVelocity = velocity,
-                                    animationSpec = spring(dampingRatio = 0.62f, stiffness = Spring.StiffnessMedium)
-                                ) { value, _ -> dragState.offsetX = value }
-                            }
-                        }
-                    } else {
-                        dragState.offsetX = 0f
-                    }
-                },
-                onHorizontalDragCancel = { dragState.offsetX = 0f },
-                onVerticalDrag = { dy ->
-                    scope.launch { verticalOffset.snapTo(verticalOffset.value + dy) }
-                },
-                onVerticalDragEnd = { velocity ->
-                    scope.launch {
-                        val state = latestState.value
-                        val slot = slotHeightPx.coerceAtLeast(1f)
-                        val commitDistance = slot * SwipeTuning.WHEEL_COMMIT_DISTANCE_FRACTION
+        ) {
+            BoxWithConstraints(Modifier.fillMaxSize()) {
+                val itemHeight = maxHeight * settings.cardHeightFraction
+                val itemHeightPx = with(LocalDensity.current) { itemHeight.toPx() }
+                val verticalPadding = ((maxHeight - itemHeight) / 2).coerceAtLeast(0.dp)
 
-                        // Exactly one photo per gesture, always - a fast fling used to compute a
-                        // multi-photo jump and animate straight to that distant target, but only
-                        // the original 5 nearby cards ever existed, so the intermediate photos
-                        // were never rendered at all: the wheel looked frozen, then the whole
-                        // visible set swapped at once. Capping to one step means every swipe shows
-                        // the same real, always-visible center-recedes/next-grows transition.
-                        val step = when {
-                            abs(verticalOffset.value) > commitDistance -> if (verticalOffset.value < 0f) 1 else -1
-                            abs(velocity) > SwipeTuning.WHEEL_FLING_VELOCITY_PX_PER_SEC -> if (velocity < 0f) 1 else -1
-                            else -> 0
-                        }
-                        val maxForward = (state.photos.size - 1 - state.currentIndex).coerceAtLeast(0)
-                        val maxBackward = state.currentIndex.coerceAtLeast(0)
-                        val steps = step.coerceIn(-maxBackward, maxForward)
-
-                        if (steps != 0) {
-                            // Commit the index change FIRST, and simultaneously shift the offset by
-                            // the same amount in the opposite direction. Net visual position is
-                            // unchanged at this instant - but now slot 0 holds the photo we're
-                            // travelling TO, so animating the offset to zero physically moves that
-                            // new photo into the center. Previously we animated first and swapped
-                            // the index afterwards, which meant the animation moved stale content
-                            // and the actual photo change happened as an instant one-frame jump.
-                            onNavigateDelta(steps)
-                            verticalOffset.snapTo(verticalOffset.value + steps * slot)
-                        }
-
-                        verticalOffset.animateTo(
-                            targetValue = 0f,
-                            animationSpec = spring(dampingRatio = 0.82f, stiffness = Spring.StiffnessLow),
-                            initialVelocity = velocity
-                        )
-                    }
-                }
-            ),
-        contentAlignment = Alignment.Center
-    ) {
-        // Draw furthest-from-the-active-card first, active card last, so whichever photo is
-        // actually being swiped renders on top of its shrinking neighbors.
-        val drawOrder = (-VISIBLE_RADIUS..VISIBLE_RADIUS).sortedByDescending { abs(it - activeSwipeSlot) }
-        for (slot in drawOrder) {
-            val i = currentIndex + slot
-            val photo = photos.getOrNull(i) ?: continue
-            val isDraggable = slot == activeSwipeSlot
-
-            key(slot) {
-                // Read once per composition for the scrim; the transform below still reads live
-                // state at draw-time so the wheel itself stays recomposition-free while spinning.
-                val staticDistance = abs(slot.toFloat())
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(CARD_WIDTH_FRACTION)
-                        .fillMaxHeight(CARD_HEIGHT_FRACTION)
-                        .onGloballyPositioned { if (isDraggable) dragState.widthPx = it.size.width.toFloat() }
-                        .graphicsLayer {
-                            // Everything here reads live animated/drag state directly at draw-time,
-                            // so the wheel spinning does NOT trigger recomposition every frame - only
-                            // the render layer's transform updates, which is what makes this smooth.
-                            val signedDistance = slot + verticalOffset.value / slotHeightPx.coerceAtLeast(1f)
-                            val baseHeightPx = containerHeightPx * CARD_HEIGHT_FRACTION
-                            val absD = abs(signedDistance)
-                            val scale = levelScale(absD)
-
-                            translationY = slotCenterY(signedDistance, baseHeightPx, peekPx)
-                            if (isDraggable) {
-                                translationX = dragState.offsetX
-                                rotationZ = (dragState.offsetX / 38f).coerceIn(-16f, 16f)
-                            }
-                            scaleX = scale
-                            scaleY = scale
-                            // Deliberately NOT fading here - fully opaque cards occlude the ones
-                            // behind them. Depth is conveyed by the scrim inside PhotoCard instead.
-                            alpha = 1f
-                        }
+                LazyColumn(
+                    state = listState,
+                    flingBehavior = flingBehavior,
+                    contentPadding = PaddingValues(vertical = verticalPadding),
+                    modifier = Modifier.fillMaxSize()
                 ) {
-                    // PhotoCard is always called the same way here (never conditionally wrapped) -
-                    // that structural stability is what lets its internal crossfade state survive
-                    // across photo changes instead of being torn down and recreated.
-                    PhotoCard(
-                        photo = photo,
-                        modifier = Modifier.fillMaxSize(),
-                        glowColor = if (isDraggable && dragProgress > 0.02f) dragDirectionColor else null,
-                        glowStrength = if (isDraggable) dragProgress else 0f,
-                        dimAmount = levelDim(staticDistance)
-                    )
+                    items(count = photos.size, key = { photos[it].id }) { index ->
+                        val photo = photos[index]
+                        val isCentered = index == centeredIndex
+
+                        Box(
+                            modifier = Modifier
+                                .fillParentMaxWidth(settings.cardWidthFraction)
+                                .height(itemHeight)
+                                .align(Alignment.CenterHorizontally)
+                                .graphicsLayer {
+                                    // Reads live scroll state at DRAW time, not recomposition time -
+                                    // this is what keeps scrolling itself from forcing recomposition.
+                                    val signedDistance = centerSignedDistance(listState, index)
+                                    val distance = abs(signedDistance)
+                                    val scale = levelScale(distance, settings.shrinkPerLevel)
+                                    scaleX = scale
+                                    scaleY = scale
+                                    // User-tunable extra pull-together/push-apart on top of natural
+                                    // list spacing - negative dp overlaps neighboring photos more,
+                                    // positive dp spaces them out further.
+                                    translationY = signedDistance * itemSpacingPx
+                                    if (isCentered) {
+                                        translationX = dragOffsetX.value
+                                        rotationZ = (dragOffsetX.value / 38f).coerceIn(-16f, 16f)
+                                    }
+                                }
+                                .then(
+                                    if (isCentered) {
+                                        Modifier.pointerInput(photo.id) {
+                                            dragWidthPx = size.width.toFloat()
+                                            val velocityTracker = androidx.compose.ui.input.pointer.util.VelocityTracker()
+                                            coroutineScope {
+                                                launch {
+                                                    detectTapGestures(onTap = { onTapCenter(photo) })
+                                                }
+                                                launch {
+                                                    detectHorizontalDragGestures(
+                                                        onDragStart = { velocityTracker.resetTracking() },
+                                                        onDragCancel = {
+                                                            scope.launch {
+                                                                dragOffsetX.animateTo(
+                                                                    0f,
+                                                                    spring(dampingRatio = 0.62f, stiffness = Spring.StiffnessMedium)
+                                                                )
+                                                            }
+                                                        },
+                                                        onDragEnd = {
+                                                            val velocity = velocityTracker.calculateVelocity().x
+                                                            val dist = dragWidthPx * settings.swipeCommitDistanceFraction
+                                                            val right = dragOffsetX.value > dist ||
+                                                                (dragOffsetX.value > 0f && velocity > settings.swipeCommitVelocity)
+                                                            val left = dragOffsetX.value < -dist ||
+                                                                (dragOffsetX.value < 0f && velocity < -settings.swipeCommitVelocity)
+                                                            when {
+                                                                right -> {
+                                                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                                    scope.launch {
+                                                                        animate(
+                                                                            initialValue = dragOffsetX.value,
+                                                                            targetValue = dragWidthPx * 1.4f,
+                                                                            animationSpec = tween(190, easing = FastOutLinearInEasing)
+                                                                        ) { value, _ -> dragOffsetX.snapTo(value) }
+                                                                        dragOffsetX.snapTo(0f)
+                                                                    }
+                                                                    scope.launch { listState.animateScrollBy(itemHeightPx) }
+                                                                    onCommitKeep(photo)
+                                                                }
+                                                                left -> {
+                                                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                                    scope.launch {
+                                                                        animate(
+                                                                            initialValue = dragOffsetX.value,
+                                                                            targetValue = -dragWidthPx * 1.4f,
+                                                                            animationSpec = tween(190, easing = FastOutLinearInEasing)
+                                                                        ) { value, _ -> dragOffsetX.snapTo(value) }
+                                                                        dragOffsetX.snapTo(0f)
+                                                                    }
+                                                                    // Deleting removes the photo from the list, which shifts
+                                                                    // every later index down by one - the item that was next
+                                                                    // naturally reflows into this same visual position, so no
+                                                                    // explicit scroll is needed here (unlike the keep case).
+                                                                    onCommitDelete(photo)
+                                                                }
+                                                                else -> {
+                                                                    scope.launch {
+                                                                        dragOffsetX.animateTo(
+                                                                            0f,
+                                                                            spring(dampingRatio = 0.62f, stiffness = Spring.StiffnessMedium)
+                                                                        )
+                                                                    }
+                                                                }
+                                                            }
+                                                        },
+                                                        onHorizontalDrag = { change, dragAmount ->
+                                                            change.consume()
+                                                            velocityTracker.addPointerInputChange(change)
+                                                            scope.launch { dragOffsetX.snapTo(dragOffsetX.value + dragAmount) }
+                                                        }
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        Modifier
+                                    }
+                                )
+                        ) {
+                            PhotoCard(
+                                photo = photo,
+                                modifier = Modifier.fillMaxSize(),
+                                glowColor = if (isCentered && dragProgress > 0.02f) dragDirectionColor else null,
+                                glowStrength = if (isCentered) dragProgress else 0f,
+                                dimProvider = { levelDim(centerDistance(listState, index), settings.dimPerLevel, settings.maxDim) }
+                            )
+                        }
+                    }
                 }
             }
-        }
 
-        Text(
-            text = stringResource(R.string.sort_hint),
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-            textAlign = TextAlign.Center,
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .fillMaxWidth()
-                .padding(top = 10.dp)
-        )
+            Text(
+                text = stringResource(R.string.sort_hint),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth()
+                    .padding(top = 10.dp)
+            )
 
-        // Trash bin, visible right inside the wheel view - tap to jump into the Trash screen.
-        TrashBinButton(
-            pendingCount = pendingDeleteCount,
-            onClick = onOpenTrash,
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(20.dp)
-        )
+            // Trash bin, visible right inside the wheel view - tap to jump into the Trash screen.
+            TrashBinButton(
+                pendingCount = pendingDeleteCount,
+                onClick = onOpenTrash,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(20.dp)
+            )
         }
     }
 }
+
 
 /**
  * A soft, colorful "gradient mesh" backdrop - several large, low-opacity radial blobs in the
@@ -626,8 +614,10 @@ private fun TrashBinButton(pendingCount: Int, onClick: () -> Unit, modifier: Mod
  * preload (different size = different cache entry = cache miss). The centered card gets an
  * optional colored glow shadow instead of a flat screen-wide tint.
  *
- * [dimAmount] darkens back-layer cards via an opaque scrim rather than by reducing alpha - a
- * translucent card would let the cards behind it show through and blend into an unreadable pile.
+ * [dimProvider] darkens back cards via an opaque scrim rather than by reducing alpha - a
+ * translucent card would let whatever's behind it show through. It's a lambda (read inside
+ * graphicsLayer, at draw-time) rather than a plain Float so scrolling can update it every frame
+ * without forcing this composable to recompose - matching how the scale transform above works.
  */
 @Composable
 private fun PhotoCard(
@@ -635,7 +625,7 @@ private fun PhotoCard(
     modifier: Modifier = Modifier,
     glowColor: Color? = null,
     glowStrength: Float = 0f,
-    dimAmount: Float = 0f
+    dimProvider: () -> Float = { 0f }
 ) {
     val shadowColor = if (glowColor != null) glowColor.copy(alpha = 0.85f) else NEUTRAL_SHADOW
     val elevation = lerp(8.dp, 26.dp, glowStrength.coerceIn(0f, 1f))
@@ -659,13 +649,12 @@ private fun PhotoCard(
                 sizePx = PHOTO_REQUEST_PX,
                 modifier = Modifier.fillMaxSize()
             )
-            if (dimAmount > 0f) {
-                Box(
-                    Modifier
-                        .fillMaxSize()
-                        .background(Color.Black.copy(alpha = dimAmount.coerceIn(0f, 1f)))
-                )
-            }
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .graphicsLayer { alpha = dimProvider().coerceIn(0f, 1f) }
+                    .background(Color.Black)
+            )
             if (photo.isVideo) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Box(

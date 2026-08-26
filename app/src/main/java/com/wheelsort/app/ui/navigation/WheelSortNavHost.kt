@@ -16,6 +16,7 @@ import com.wheelsort.app.ui.duplicates.DuplicateScreen
 import com.wheelsort.app.ui.grid.GridScreen
 import com.wheelsort.app.ui.home.HomeScreen
 import com.wheelsort.app.ui.organize.OrganizeScreen
+import com.wheelsort.app.ui.settings.SettingsScreen
 import com.wheelsort.app.ui.sort.SortScreen
 import com.wheelsort.app.ui.stats.StatsScreen
 import com.wheelsort.app.ui.trash.TrashScreen
@@ -31,6 +32,7 @@ private object Routes {
     const val BACKUP = "backup"
     const val GRID = "grid?album={album}"
     const val DUPLICATES = "duplicates"
+    const val SETTINGS = "settings"
 
     fun sort(album: String?, newestFirst: Boolean, screenshotsFirst: Boolean): String {
         val encoded = URLEncoder.encode(album ?: "", "UTF-8")
@@ -75,7 +77,8 @@ fun WheelSortNavHost() {
                 onOpenOrganize = { navController.navigate(Routes.ORGANIZE) },
                 onOpenBackup = { navController.navigate(Routes.BACKUP) },
                 onOpenGrid = { album -> navController.navigate(Routes.grid(album)) },
-                onOpenDuplicates = { navController.navigate(Routes.DUPLICATES) }
+                onOpenDuplicates = { navController.navigate(Routes.DUPLICATES) },
+                onOpenSettings = { navController.navigate(Routes.SETTINGS) }
             )
         }
         composable(
@@ -120,6 +123,9 @@ fun WheelSortNavHost() {
         }
         composable(Routes.DUPLICATES) {
             DuplicateScreen(onExit = { navController.popBackStack() })
+        }
+        composable(Routes.SETTINGS) {
+            SettingsScreen(onExit = { navController.popBackStack() })
         }
     }
 }
