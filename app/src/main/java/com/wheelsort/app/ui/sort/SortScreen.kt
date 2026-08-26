@@ -7,8 +7,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutLinearInEasing
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -48,6 +46,8 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.input.pointer.util.addPointerInputChange
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
@@ -331,10 +331,11 @@ private fun WheelCarousel(
     val haptics = LocalHapticFeedback.current
     val listState = rememberLazyListState()
     val snapLayoutInfo = remember(listState) { SnapLayoutInfoProvider(listState) }
-    val flingBehavior = rememberSnapFlingBehavior(
-        snapLayoutInfo,
-        snapAnimationSpec = spring(dampingRatio = settings.snapDamping, stiffness = settings.snapStiffness)
-    )
+    // NOTE: this Compose Foundation version only exposes rememberSnapFlingBehavior(provider) with
+    // no way to pass a custom spring - the vertical scroll's settle animation isn't independently
+    // tunable here. "Swipe-back smoothness/bounciness" in settings instead drive the horizontal
+    // keep/delete swipe's spring, which is something this code does have direct control over.
+    val flingBehavior = rememberSnapFlingBehavior(snapLayoutInfo)
     val latestState = rememberUpdatedState(uiState)
 
     val dragOffsetX = remember { Animatable(0f) }
@@ -395,6 +396,7 @@ private fun WheelCarousel(
                     state = listState,
                     flingBehavior = flingBehavior,
                     contentPadding = PaddingValues(vertical = verticalPadding),
+                    horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier.fillMaxSize()
                 ) {
                     items(count = photos.size, key = { photos[it].id }) { index ->
@@ -405,7 +407,6 @@ private fun WheelCarousel(
                             modifier = Modifier
                                 .fillParentMaxWidth(settings.cardWidthFraction)
                                 .height(itemHeight)
-                                .align(Alignment.CenterHorizontally)
                                 .graphicsLayer {
                                     // Reads live scroll state at DRAW time, not recomposition time -
                                     // this is what keeps scrolling itself from forcing recomposition.
@@ -427,7 +428,7 @@ private fun WheelCarousel(
                                     if (isCentered) {
                                         Modifier.pointerInput(photo.id) {
                                             dragWidthPx = size.width.toFloat()
-                                            val velocityTracker = androidx.compose.ui.input.pointer.util.VelocityTracker()
+                                            val velocityTracker = VelocityTracker()
                                             coroutineScope {
                                                 launch {
                                                     detectTapGestures(onTap = { onTapCenter(photo) })
@@ -439,7 +440,7 @@ private fun WheelCarousel(
                                                             scope.launch {
                                                                 dragOffsetX.animateTo(
                                                                     0f,
-                                                                    spring(dampingRatio = 0.62f, stiffness = Spring.StiffnessMedium)
+                                                                    spring(dampingRatio = settings.snapDamping, stiffness = settings.snapStiffness)
                                                                 )
                                                             }
                                                         },
@@ -454,11 +455,10 @@ private fun WheelCarousel(
                                                                 right -> {
                                                                     haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                                                                     scope.launch {
-                                                                        animate(
-                                                                            initialValue = dragOffsetX.value,
+                                                                        dragOffsetX.animateTo(
                                                                             targetValue = dragWidthPx * 1.4f,
                                                                             animationSpec = tween(190, easing = FastOutLinearInEasing)
-                                                                        ) { value, _ -> dragOffsetX.snapTo(value) }
+                                                                        )
                                                                         dragOffsetX.snapTo(0f)
                                                                     }
                                                                     scope.launch { listState.animateScrollBy(itemHeightPx) }
@@ -467,11 +467,10 @@ private fun WheelCarousel(
                                                                 left -> {
                                                                     haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                                                                     scope.launch {
-                                                                        animate(
-                                                                            initialValue = dragOffsetX.value,
+                                                                        dragOffsetX.animateTo(
                                                                             targetValue = -dragWidthPx * 1.4f,
                                                                             animationSpec = tween(190, easing = FastOutLinearInEasing)
-                                                                        ) { value, _ -> dragOffsetX.snapTo(value) }
+                                                                        )
                                                                         dragOffsetX.snapTo(0f)
                                                                     }
                                                                     // Deleting removes the photo from the list, which shifts
@@ -484,7 +483,7 @@ private fun WheelCarousel(
                                                                     scope.launch {
                                                                         dragOffsetX.animateTo(
                                                                             0f,
-                                                                            spring(dampingRatio = 0.62f, stiffness = Spring.StiffnessMedium)
+                                                                            spring(dampingRatio = settings.snapDamping, stiffness = settings.snapStiffness)
                                                                         )
                                                                     }
                                                                 }

@@ -109,14 +109,16 @@ internal fun LazyListScope.wheelSettingsSliderItems(
         )
     }
 
-    item { SectionHeader("Motion") }
+    item { SectionHeader("Swipe motion") }
     item {
         // Displayed as 0-100 "smoothness", inverted against spring stiffness (lower
         // stiffness = slower/smoother settle, higher = snappier) so the slider reads
         // intuitively even though the underlying physics value moves the other way.
+        // Drives the spring that returns a swipe to center when it doesn't commit -
+        // Compose's built-in vertical scroll-snap animation isn't customizable here.
         val smoothness = 1f - ((settings.snapStiffness - 50f) / (2000f - 50f)).coerceIn(0f, 1f)
         SettingSlider(
-            label = "Scroll smoothness",
+            label = "Swipe-back smoothness",
             value = smoothness,
             valueRange = 0f..1f,
             valueLabel = { "${(it * 100).roundToInt()}%" },
@@ -130,7 +132,7 @@ internal fun LazyListScope.wheelSettingsSliderItems(
     item {
         val bounciness = 1f - settings.snapDamping.coerceIn(0.35f, 1f).let { (it - 0.35f) / 0.65f }
         SettingSlider(
-            label = "Bounciness",
+            label = "Swipe-back bounciness",
             value = bounciness,
             valueRange = 0f..1f,
             valueLabel = { "${(it * 100).roundToInt()}%" },

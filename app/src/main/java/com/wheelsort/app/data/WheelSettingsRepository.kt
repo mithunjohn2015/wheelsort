@@ -18,9 +18,14 @@ data class WheelSettings(
     val dimPerLevel: Float = 0.26f,
     /** Cap on how dark a background photo can get, regardless of distance. */
     val maxDim: Float = 0.65f,
-    /** Spring stiffness for the scroll settling into place - lower = slower/smoother, higher = snappier. */
+    /**
+     * Spring stiffness for the swipe returning to center when a keep/delete drag doesn't commit -
+     * lower = slower/smoother, higher = snappier. (Compose's built-in vertical scroll-snap
+     * animation isn't independently customizable in this project's Compose Foundation version,
+     * so this controls the horizontal swipe spring instead - the one motion here that is.)
+     */
     val snapStiffness: Float = 400f,
-    /** Spring damping ratio for the settle - 1.0 = no bounce, lower = bouncier. */
+    /** Damping ratio for that same swipe-back spring - 1.0 = no bounce, lower = bouncier. */
     val snapDamping: Float = 1f,
     /** Fraction of card width you must drag before a keep/delete swipe commits - lower = easier. */
     val swipeCommitDistanceFraction: Float = 0.34f,
