@@ -15,7 +15,8 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.animateScrollBy
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.snapping.SnapLayoutInfoProvider
 import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
@@ -45,6 +46,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.input.pointer.util.addPointerInputChange
@@ -414,6 +416,54 @@ private fun WheelCarousel(
                     // CURRENTLY centered at gesture-time rather than baking in a specific one.
                     .pointerInput(Unit) {
                         val velocityTracker = VelocityTracker()
+
+                        suspend fun springBack() {
+                            val s = latestSettings.value
+                            dragOffsetX.animateTo(0f, spring(dampingRatio = s.snapDamping, stiffness = s.snapStiffness))
+                        }
+
+                        suspend fun commitDrag() {
+                            val photo = latestState.value.photos.getOrNull(centeredIndex) ?: return
+                            val s = latestSettings.value
+                            val widthPx = latestItemWidthPx.value
+                            val velocity = velocityTracker.calculateVelocity().x
+                            val dist = widthPx * s.swipeCommitDistanceFraction
+                            val right = dragOffsetX.value > dist ||
+                                (dragOffsetX.value > 0f && velocity > s.swipeCommitVelocity)
+                            val left = dragOffsetX.value < -dist ||
+                                (dragOffsetX.value < 0f && velocity < -s.swipeCommitVelocity)
+                            when {
+                                right -> {
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    scope.launch {
+                                        dragOffsetX.animateTo(
+                                            targetValue = widthPx * 1.4f,
+                                            animationSpec = tween(190, easing = FastOutLinearInEasing)
+                                        )
+                                        dragOffsetX.snapTo(0f)
+                                    }
+                                    scope.launch { listState.animateScrollBy(latestItemHeightPx.value) }
+                                    onCommitKeep(photo)
+                                }
+                                left -> {
+                                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    scope.launch {
+                                        dragOffsetX.animateTo(
+                                            targetValue = -widthPx * 1.4f,
+                                            animationSpec = tween(190, easing = FastOutLinearInEasing)
+                                        )
+                                        dragOffsetX.snapTo(0f)
+                                    }
+                                    // Deleting removes the photo from the list, which shifts
+                                    // every later index down by one - the item that was next
+                                    // naturally reflows into this same visual position, so no
+                                    // explicit scroll is needed here (unlike the keep case).
+                                    onCommitDelete(photo)
+                                }
+                                else -> scope.launch { springBack() }
+                            }
+                        }
+
                         coroutineScope {
                             launch {
                                 detectTapGestures(onTap = {
@@ -421,72 +471,55 @@ private fun WheelCarousel(
                                 })
                             }
                             launch {
-                                detectHorizontalDragGestures(
-                                    onDragStart = { velocityTracker.resetTracking() },
-                                    onDragCancel = {
-                                        val s = latestSettings.value
-                                        scope.launch {
-                                            dragOffsetX.animateTo(
-                                                0f,
-                                                spring(dampingRatio = s.snapDamping, stiffness = s.snapStiffness)
-                                            )
-                                        }
-                                    },
-                                    onDragEnd = {
-                                        val photo = latestState.value.photos.getOrNull(centeredIndex)
-                                            ?: return@detectHorizontalDragGestures
-                                        val s = latestSettings.value
-                                        val widthPx = latestItemWidthPx.value
-                                        val velocity = velocityTracker.calculateVelocity().x
-                                        val dist = widthPx * s.swipeCommitDistanceFraction
-                                        val right = dragOffsetX.value > dist ||
-                                            (dragOffsetX.value > 0f && velocity > s.swipeCommitVelocity)
-                                        val left = dragOffsetX.value < -dist ||
-                                            (dragOffsetX.value < 0f && velocity < -s.swipeCommitVelocity)
-                                        when {
-                                            right -> {
-                                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                                scope.launch {
-                                                    dragOffsetX.animateTo(
-                                                        targetValue = widthPx * 1.4f,
-                                                        animationSpec = tween(190, easing = FastOutLinearInEasing)
-                                                    )
-                                                    dragOffsetX.snapTo(0f)
-                                                }
-                                                scope.launch { listState.animateScrollBy(latestItemHeightPx.value) }
-                                                onCommitKeep(photo)
-                                            }
-                                            left -> {
-                                                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                                                scope.launch {
-                                                    dragOffsetX.animateTo(
-                                                        targetValue = -widthPx * 1.4f,
-                                                        animationSpec = tween(190, easing = FastOutLinearInEasing)
-                                                    )
-                                                    dragOffsetX.snapTo(0f)
-                                                }
-                                                // Deleting removes the photo from the list, which shifts
-                                                // every later index down by one - the item that was next
-                                                // naturally reflows into this same visual position, so no
-                                                // explicit scroll is needed here (unlike the keep case).
-                                                onCommitDelete(photo)
-                                            }
-                                            else -> {
-                                                scope.launch {
-                                                    dragOffsetX.animateTo(
-                                                        0f,
-                                                        spring(dampingRatio = s.snapDamping, stiffness = s.snapStiffness)
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    },
-                                    onHorizontalDrag = { change, dragAmount ->
-                                        change.consume()
+                                // Hand-written instead of detectHorizontalDragGestures, which only
+                                // ever examines events on the Main pass. Main pass propagates
+                                // leaf-to-root - LazyColumn (the child here) gets first look at
+                                // every touch event and can claim it as a vertical scroll before a
+                                // Main-pass detector on this parent ever sees it, no matter how
+                                // clearly horizontal the drag was. Initial pass propagates root-to-
+                                // leaf instead, so examining events here means this code decides
+                                // the axis and can consume a horizontal drag BEFORE LazyColumn's own
+                                // scroll handling gets its turn - which is what actually fixes swipes
+                                // losing to scroll instead of just changing where the detector lives.
+                                awaitEachGesture {
+                                    val down = awaitFirstDown(pass = PointerEventPass.Initial)
+                                    velocityTracker.resetTracking()
+                                    velocityTracker.addPointerInputChange(down)
+                                    val pointerId = down.id
+                                    var lockedHorizontal = false
+                                    var lastX = down.position.x
+
+                                    while (true) {
+                                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                                        val change = event.changes.firstOrNull { it.id == pointerId } ?: break
+                                        if (change.isConsumed) break
+                                        if (!change.pressed) break
+
                                         velocityTracker.addPointerInputChange(change)
-                                        scope.launch { dragOffsetX.snapTo(dragOffsetX.value + dragAmount) }
+
+                                        if (!lockedHorizontal) {
+                                            val total = change.position - down.position
+                                            if (total.getDistance() > viewConfiguration.touchSlop) {
+                                                if (abs(total.x) > abs(total.y)) {
+                                                    lockedHorizontal = true
+                                                } else {
+                                                    // Clearly vertical - not ours. Stop watching this
+                                                    // gesture entirely and let LazyColumn's own Main-
+                                                    // pass handling see every event untouched.
+                                                    break
+                                                }
+                                            }
+                                        }
+
+                                        if (lockedHorizontal) {
+                                            change.consume()
+                                            dragOffsetX.snapTo(dragOffsetX.value + (change.position.x - lastX))
+                                        }
+                                        lastX = change.position.x
                                     }
-                                )
+
+                                    if (lockedHorizontal) commitDrag()
+                                }
                             }
                         }
                     }
