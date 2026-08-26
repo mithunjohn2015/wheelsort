@@ -71,7 +71,14 @@ class PhotoRepository(private val context: Context) {
         val images = queryCollection(imagesCollection, imageProjection, isVideo = false, trashedOnly, bucketName)
         val videos = queryCollection(videoCollection, videoProjection, isVideo = true, trashedOnly, bucketName)
         val merged = images + videos
-        return if (newestFirst) merged.sortedByDescending { it.dateAdded } else merged.sortedBy { it.dateAdded }
+        // dateAdded is when MediaStore indexed the file, not when the photo was actually taken -
+        // for a library restored from a backup or synced in bulk, that can be nearly identical
+        // across thousands of photos even though they span years, which made "newest/oldest"
+        // look like it wasn't doing anything. dateTaken reflects the real capture time and is
+        // what "newest/oldest" should actually mean; fall back to dateAdded only when a photo
+        // has no dateTaken at all.
+        fun effectiveDate(p: Photo) = if (p.dateTaken > 0) p.dateTaken else p.dateAdded
+        return if (newestFirst) merged.sortedByDescending(::effectiveDate) else merged.sortedBy(::effectiveDate)
     }
 
     private fun queryCollection(

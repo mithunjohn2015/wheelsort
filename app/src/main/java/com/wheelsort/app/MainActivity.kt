@@ -4,7 +4,6 @@ import android.animation.Animator
 import android.animation.AnimatorListenerAdapter
 import android.animation.ObjectAnimator
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
@@ -19,19 +18,29 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.core.content.ContextCompat
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.wheelsort.app.ui.navigation.WheelSortNavHost
 import com.wheelsort.app.ui.permission.PermissionScreen
+import com.wheelsort.app.ui.splash.AnimatedSplashScreen
 import com.wheelsort.app.ui.theme.WheelSortTheme
-import com.wheelsort.app.util.readImagesPermission
+import com.wheelsort.app.util.hasMediaAccess
+import com.wheelsort.app.util.requiredMediaPermissions
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         val splashScreen = installSplashScreen()
         super.onCreate(savedInstanceState)
+
+        // Without this, the system splash can hand off before Compose has produced its actual
+        // first frame - especially likely on a genuinely cold start right after install, where
+        // class loading and the first composition pass take longer than usual. That gap is what
+        // showed as "splash flashes, then closes" - the splash was dismissed on schedule, but
+        // there was nothing real to show yet underneath it. Keeping the splash up until this
+        // activity confirms it's actually composed removes that gap entirely.
+        var contentReady = false
+        splashScreen.setKeepOnScreenCondition { !contentReady }
 
         // A small custom exit: the icon punches up and fades as the splash hands off to the
         // app content, instead of the system's default instant cut.
@@ -61,7 +70,13 @@ class MainActivity : ComponentActivity() {
         setContent {
             WheelSortTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    PermissionGate()
+                    var showAnimatedSplash by remember { mutableStateOf(true) }
+                    LaunchedEffect(Unit) { contentReady = true }
+                    if (showAnimatedSplash) {
+                        AnimatedSplashScreen(onFinished = { showAnimatedSplash = false })
+                    } else {
+                        PermissionGate()
+                    }
                 }
             }
         }
@@ -71,21 +86,24 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun PermissionGate() {
     val context = androidx.compose.ui.platform.LocalContext.current
-    val permission = remember { readImagesPermission() }
+    val permissions = remember { requiredMediaPermissions() }
 
-    fun currentlyGranted() =
-        ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
-
-    var hasPermission by remember { mutableStateOf(currentlyGranted()) }
+    var hasPermission by remember { mutableStateOf(hasMediaAccess(context)) }
     var permanentlyDenied by remember { mutableStateOf(false) }
 
     val launcher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { _ ->
+        // Don't trust the callback's own granted-map directly - on 34+, choosing "Select photos"
+        // reports the requested permissions as NOT granted even though access was granted via a
+        // different permission (READ_MEDIA_VISUAL_USER_SELECTED). Always re-check the real state.
+        val granted = hasMediaAccess(context)
         hasPermission = granted
         if (!granted) {
             val activity = context as? ComponentActivity
-            permanentlyDenied = activity?.shouldShowRequestPermissionRationale(permission) == false
+            permanentlyDenied = permissions.none {
+                activity?.shouldShowRequestPermissionRationale(it) == true
+            }
         }
     }
 
@@ -96,7 +114,7 @@ private fun PermissionGate() {
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                val granted = currentlyGranted()
+                val granted = hasMediaAccess(context)
                 if (granted != hasPermission) hasPermission = granted
             }
         }
@@ -109,7 +127,7 @@ private fun PermissionGate() {
     } else {
         PermissionScreen(
             permanentlyDenied = permanentlyDenied,
-            onRequestPermission = { launcher.launch(permission) },
+            onRequestPermission = { launcher.launch(permissions) },
             onOpenSettings = {
                 val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
                     data = Uri.fromParts("package", context.packageName, null)

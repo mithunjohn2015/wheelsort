@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Android 13+ granular media permission -->
+    <!-- Android 13+ granular media permissions - images and video are SEPARATE permissions -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <!-- Android 10-12 fallback -->
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"

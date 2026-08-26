@@ -105,7 +105,10 @@ fun WheelSortNavHost() {
             TrashScreen(onExit = { navController.popBackStack() })
         }
         composable(Routes.STATS) {
-            StatsScreen(onExit = { navController.popBackStack() })
+            StatsScreen(
+                onExit = { navController.popBackStack() },
+                onOpenAlbum = { album -> navController.navigate(Routes.grid(album)) }
+            )
         }
         composable(Routes.ORGANIZE) {
             OrganizeScreen(onExit = { navController.popBackStack() })

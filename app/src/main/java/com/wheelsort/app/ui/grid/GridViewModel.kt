@@ -66,4 +66,15 @@ class GridViewModel(application: Application) : AndroidViewModel(application) {
         if (uris.isEmpty()) return null
         return repository.createFavoriteRequest(uris, favorite)
     }
+
+    /** For the full-screen viewer's favorite toggle, which acts on one photo, not the selection. */
+    fun buildFavoriteIntentForPhoto(photo: Photo, favorite: Boolean): PendingIntent =
+        repository.createFavoriteRequest(listOf(photo.uri), favorite)
+
+    /** Ensures this id IS selected (idempotent) - used while drag-painting a selection, where
+     *  re-passing over an already-selected item should never accidentally deselect it. */
+    fun ensureSelected(id: Long) {
+        val cur = _uiState.value.selected
+        if (id !in cur) _uiState.value = _uiState.value.copy(selected = cur + id)
+    }
 }

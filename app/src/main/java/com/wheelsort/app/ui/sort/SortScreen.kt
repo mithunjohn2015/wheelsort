@@ -70,6 +70,7 @@ import com.wheelsort.app.util.formatDuration
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.pow
 
 private enum class SortPhase { LOADING, COMPLETE, WHEEL }
@@ -552,12 +553,39 @@ private fun WheelCarousel(
                                     val signedDistance = centerSignedDistance(listState, index)
                                     val distance = abs(signedDistance)
                                     val scale = levelScale(distance, settings.shrinkPerLevel)
-                                    scaleX = scale
-                                    scaleY = scale
-                                    // User-tunable extra pull-together/push-apart on top of natural
-                                    // list spacing - negative dp overlaps neighboring photos more,
-                                    // positive dp spaces them out further.
-                                    translationY = signedDistance * itemSpacingPx
+
+                                    when (settings.transitionStyle) {
+                                        com.wheelsort.app.data.WheelTransitionStyle.STACK -> {
+                                            scaleX = scale
+                                            scaleY = scale
+                                            // User-tunable extra pull-together/push-apart on top of
+                                            // natural list spacing - negative dp overlaps neighboring
+                                            // photos more, positive dp spaces them out further.
+                                            translationY = signedDistance * itemSpacingPx
+                                        }
+                                        com.wheelsort.app.data.WheelTransitionStyle.FLIP -> {
+                                            // Deliberately NOT using rotationX/cameraDistance (true 3D
+                                            // rotation) - this exact combination caused a GPU-specific
+                                            // transparent-card bug earlier in this project. This fakes
+                                            // a similar "turning edge-on and flipping away" look safely
+                                            // by squeezing scaleX toward zero instead of tilting in 3D.
+                                            val angleDeg = (signedDistance * 55f).coerceIn(-80f, 80f)
+                                            val angleRad = angleDeg * (kotlin.math.PI.toFloat() / 180f)
+                                            val flipScaleX = cos(angleRad).coerceAtLeast(0.08f)
+                                            scaleX = flipScaleX * scale
+                                            scaleY = scale
+                                            rotationZ = (signedDistance * 6f).coerceIn(-18f, 18f)
+                                            translationY = signedDistance * itemSpacingPx * 0.6f
+                                        }
+                                        com.wheelsort.app.data.WheelTransitionStyle.SLIDE -> {
+                                            // No shrink, no extra offset beyond natural list flow -
+                                            // a plain flat slide, depth conveyed only by the dim scrim.
+                                            scaleX = 1f
+                                            scaleY = 1f
+                                            translationY = 0f
+                                        }
+                                    }
+
                                     if (isCentered) {
                                         translationX = dragOffsetX.value
                                         rotationZ = (dragOffsetX.value / 38f).coerceIn(-16f, 16f)

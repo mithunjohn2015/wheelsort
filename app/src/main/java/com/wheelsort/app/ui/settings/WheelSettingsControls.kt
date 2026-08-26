@@ -4,9 +4,12 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
@@ -14,6 +17,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.wheelsort.app.data.WheelSettings
+import com.wheelsort.app.data.WheelTransitionStyle
 import kotlin.math.roundToInt
 
 @Composable
@@ -57,6 +61,29 @@ internal fun SettingSlider(
     }
 }
 
+private fun styleLabel(style: WheelTransitionStyle): String = when (style) {
+    WheelTransitionStyle.STACK -> "Stack"
+    WheelTransitionStyle.FLIP -> "Flip"
+    WheelTransitionStyle.SLIDE -> "Slide"
+}
+
+@Composable
+private fun TransitionStylePicker(current: WheelTransitionStyle, onChange: (WheelTransitionStyle) -> Unit) {
+    Column(modifier = Modifier.padding(vertical = 6.dp)) {
+        Text("How photos transition", style = MaterialTheme.typography.bodyLarge)
+        Spacer(Modifier.height(4.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            WheelTransitionStyle.values().forEach { style ->
+                FilterChip(
+                    selected = style == current,
+                    onClick = { onChange(style) },
+                    label = { Text(styleLabel(style)) }
+                )
+            }
+        }
+    }
+}
+
 /**
  * Every tunable slider, as LazyColumn items - shared between the standalone Settings screen
  * (reached from Home, no live wheel to preview against) and the in-wheel overlay (reached from
@@ -67,6 +94,12 @@ internal fun LazyListScope.wheelSettingsSliderItems(
     interactionSource: MutableInteractionSource,
     onUpdate: ((WheelSettings) -> WheelSettings) -> Unit
 ) {
+    item {
+        TransitionStylePicker(
+            current = settings.transitionStyle,
+            onChange = { style -> onUpdate { it.copy(transitionStyle = style) } }
+        )
+    }
     item { SectionHeader("Layout") }
     item {
         SettingSlider(

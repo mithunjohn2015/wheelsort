@@ -1,6 +1,10 @@
 package com.wheelsort.app.ui.stats
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -11,14 +15,10 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -33,6 +33,7 @@ import coil.compose.AsyncImage
 import com.wheelsort.app.R
 import com.wheelsort.app.data.Photo
 import com.wheelsort.app.data.PhotoRepository
+import com.wheelsort.app.ui.sort.PhotoViewerOverlay
 import com.wheelsort.app.ui.theme.AccentPrimary
 import com.wheelsort.app.ui.theme.ActionDelete
 import com.wheelsort.app.util.formatBytes
@@ -45,19 +46,27 @@ private val MONTH_ACCENTS = listOf(
 )
 
 @Composable
-fun StatsScreen(onExit: () -> Unit) {
+fun StatsScreen(onExit: () -> Unit, onOpenAlbum: (String) -> Unit) {
     val context = LocalContext.current
+    val repository = remember { PhotoRepository(context) }
     var activeCount by remember { mutableStateOf(0) }
     var trashedCount by remember { mutableStateOf(0) }
     var trashedBytes by remember { mutableStateOf(0L) }
     var albumBreakdown by remember { mutableStateOf<List<Pair<String, Long>>>(emptyList()) }
     var largestPhotos by remember { mutableStateOf<List<Photo>>(emptyList()) }
+    var viewerPhoto by remember { mutableStateOf<Photo?>(null) }
+
+    val trashLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) { /* the delete button below already removes the row from view before launching this */ }
+    val favoriteLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) { /* best-effort */ }
 
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) {
-            val repo = PhotoRepository(context)
-            val active = repo.queryActivePhotos()
-            val trashed = repo.queryTrashedPhotos()
+            val active = repository.queryActivePhotos()
+            val trashed = repository.queryTrashedPhotos()
             activeCount = active.size
             trashedCount = trashed.size
             trashedBytes = trashed.sumOf { it.size }
@@ -67,7 +76,9 @@ fun StatsScreen(onExit: () -> Unit) {
                 .map { (name, photos) -> name to photos.sumOf { it.size } }
                 .sortedByDescending { it.second }
                 .take(6)
-            largestPhotos = active.sortedByDescending { it.size }.take(5)
+            // Merged active list already includes videos - sorting by size surfaces whichever
+            // (photo or video) is actually largest, which is usually videos in practice.
+            largestPhotos = active.sortedByDescending { it.size }.take(8)
         }
     }
 
@@ -102,7 +113,7 @@ fun StatsScreen(onExit: () -> Unit) {
                 item {
                     Spacer(Modifier.height(20.dp))
                     Text(
-                        "STORAGE BY ALBUM",
+                        "STORAGE BY ALBUM \u2014 tap to open",
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -110,7 +121,10 @@ fun StatsScreen(onExit: () -> Unit) {
                 }
                 itemsIndexed(albumBreakdown) { index, (name, size) ->
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onOpenAlbum(name) }
+                            .padding(vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
@@ -130,7 +144,7 @@ fun StatsScreen(onExit: () -> Unit) {
                 item {
                     Spacer(Modifier.height(20.dp))
                     Text(
-                        "LARGEST PHOTOS",
+                        "LARGEST FILES \u2014 tap to view",
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -138,17 +152,32 @@ fun StatsScreen(onExit: () -> Unit) {
                 }
                 items(largestPhotos, key = { it.id }) { photo ->
                     Row(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { viewerPhoto = photo }
+                            .padding(vertical = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        AsyncImage(
-                            model = photo.uri,
-                            contentDescription = photo.displayName,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier
-                                .size(44.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                        )
+                        Box {
+                            AsyncImage(
+                                model = photo.uri,
+                                contentDescription = photo.displayName,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .size(44.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                            )
+                            if (photo.isVideo) {
+                                Icon(
+                                    Icons.Filled.PlayArrow,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier
+                                        .align(Alignment.Center)
+                                        .size(16.dp)
+                                )
+                            }
+                        }
                         Spacer(Modifier.width(12.dp))
                         Text(
                             photo.displayName,
@@ -157,11 +186,38 @@ fun StatsScreen(onExit: () -> Unit) {
                             maxLines = 1
                         )
                         Text(formatBytes(photo.size), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                        IconButton(onClick = {
+                            largestPhotos = largestPhotos.filterNot { it.id == photo.id }
+                            try {
+                                val intent = repository.createTrashRequest(listOf(photo.uri), trash = true)
+                                trashLauncher.launch(IntentSenderRequest.Builder(intent.intentSender).build())
+                            } catch (_: Exception) { }
+                        }) {
+                            Icon(
+                                Icons.Filled.Delete,
+                                contentDescription = "Delete",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
                     }
                 }
             }
             item { Spacer(Modifier.height(20.dp)) }
         }
+    }
+
+    viewerPhoto?.let { photo ->
+        PhotoViewerOverlay(
+            photo = photo,
+            onClose = { viewerPhoto = null },
+            onToggleFavorite = { p ->
+                try {
+                    val intent = repository.createFavoriteRequest(listOf(p.uri), !p.isFavorite)
+                    favoriteLauncher.launch(IntentSenderRequest.Builder(intent.intentSender).build())
+                } catch (_: Exception) { }
+            }
+        )
     }
 }
 

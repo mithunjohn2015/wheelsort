@@ -2,12 +2,23 @@ package com.wheelsort.app.data
 
 import android.content.Context
 
+/** How each card visually transitions as it moves through the center. */
+enum class WheelTransitionStyle {
+    /** Cards shrink, dim, and peek behind each other - the original "stack" look. */
+    STACK,
+    /** Cards tip away in 3D as they leave center, like a rolodex card flipping over. */
+    FLIP,
+    /** Minimal transform - cards just slide vertically with a light fade, no depth stacking. */
+    SLIDE
+}
+
 /**
  * Every tunable knob for the wheel's look and feel, previously hardcoded constants in
  * SortScreen.kt. Exposed via the Settings screen so this can be dialed in per-device/per-taste
  * instead of guessed at blind.
  */
 data class WheelSettings(
+    val transitionStyle: WheelTransitionStyle = WheelTransitionStyle.STACK,
     val cardHeightFraction: Float = 0.56f,
     val cardWidthFraction: Float = 0.84f,
     /** Extra pull-together (-) or push-apart (+) offset between photos, in dp. 0 = natural spacing. */
@@ -41,6 +52,13 @@ class WheelSettingsRepository(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences("wheel_settings", Context.MODE_PRIVATE)
 
     fun load(): WheelSettings = WheelSettings(
+        transitionStyle = prefs.getString(KEY_STYLE, null)?.let {
+            try {
+                WheelTransitionStyle.valueOf(it)
+            } catch (_: IllegalArgumentException) {
+                WheelSettings.DEFAULT.transitionStyle
+            }
+        } ?: WheelSettings.DEFAULT.transitionStyle,
         cardHeightFraction = prefs.getFloat(KEY_CARD_HEIGHT, WheelSettings.DEFAULT.cardHeightFraction),
         cardWidthFraction = prefs.getFloat(KEY_CARD_WIDTH, WheelSettings.DEFAULT.cardWidthFraction),
         itemSpacingDp = prefs.getFloat(KEY_SPACING, WheelSettings.DEFAULT.itemSpacingDp),
@@ -55,6 +73,7 @@ class WheelSettingsRepository(context: Context) {
 
     fun save(settings: WheelSettings) {
         prefs.edit()
+            .putString(KEY_STYLE, settings.transitionStyle.name)
             .putFloat(KEY_CARD_HEIGHT, settings.cardHeightFraction)
             .putFloat(KEY_CARD_WIDTH, settings.cardWidthFraction)
             .putFloat(KEY_SPACING, settings.itemSpacingDp)
@@ -73,6 +92,7 @@ class WheelSettingsRepository(context: Context) {
     }
 
     private companion object {
+        const val KEY_STYLE = "transition_style"
         const val KEY_CARD_HEIGHT = "card_height"
         const val KEY_CARD_WIDTH = "card_width"
         const val KEY_SPACING = "spacing"

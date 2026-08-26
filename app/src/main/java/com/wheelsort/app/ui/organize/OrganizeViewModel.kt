@@ -16,7 +16,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-/** [folderName] is the literal MM-yyyy folder this group will be moved into, e.g. "08-2026". */
+/** [folderName] is the literal yyyy-MM folder this group will be moved into, e.g. "2026-08". */
 data class MonthGroup(
     val folderName: String,
     val label: String,
@@ -41,8 +41,9 @@ class OrganizeViewModel(application: Application) : AndroidViewModel(application
 
     private var pendingGroups: List<MonthGroup> = emptyList()
 
-    // Numeric folder name exactly as requested (MM-yyyy), plus a human-readable label for the list.
-    private val folderFormat = SimpleDateFormat("MM-yyyy", Locale.US)
+    // Numeric folder name exactly as requested (yyyy-MM, sorts correctly as plain text unlike
+    // MM-yyyy), plus a human-readable label for the list.
+    private val folderFormat = SimpleDateFormat("yyyy-MM", Locale.US)
     private val labelFormat = SimpleDateFormat("MMMM yyyy", Locale.getDefault())
 
     fun refresh(albumFilter: String? = null) {

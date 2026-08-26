@@ -179,9 +179,30 @@ fun PhotoViewerOverlay(
                             )
                         }
                         try {
-                            context.startActivity(Intent.createChooser(editIntent, "Edit with"))
+                            val chooser = Intent.createChooser(editIntent, "Edit with")
+                            // createChooser's own grant flags don't reliably reach every app
+                            // shown in the picker on all Android versions - explicitly granting
+                            // to each resolved candidate is the documented fix for that gap, and
+                            // without it some editors would get a SecurityException on save that
+                            // was propagating uncaught and crashing this app, not just failing
+                            // silently in the editor.
+                            val resolved = context.packageManager.queryIntentActivities(editIntent, 0)
+                            for (info in resolved) {
+                                val packageName = info.activityInfo?.packageName ?: continue
+                                context.grantUriPermission(
+                                    packageName,
+                                    photo.uri,
+                                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                                )
+                            }
+                            context.startActivity(chooser)
                         } catch (_: ActivityNotFoundException) {
-                            // no editor installed - silently ignore, nothing sensible to fall back to
+                            // no editor installed - nothing sensible to fall back to
+                            android.widget.Toast.makeText(context, "No photo editor found", android.widget.Toast.LENGTH_SHORT).show()
+                        } catch (_: Exception) {
+                            // Fail gracefully rather than crash - whatever went wrong here isn't
+                            // something the user can act on beyond knowing it didn't work.
+                            android.widget.Toast.makeText(context, "Couldn't open editor", android.widget.Toast.LENGTH_SHORT).show()
                         }
                     }) {
                         Icon(Icons.Filled.Edit, contentDescription = "Edit with\u2026", tint = Color.White)
