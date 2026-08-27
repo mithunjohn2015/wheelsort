@@ -216,6 +216,26 @@ internal fun LazyListScope.wheelSettingsSliderItems(
             onChange = { v -> onUpdate { it.copy(edgeMarginDp = v) } }
         )
     }
+    item {
+        SettingSlider(
+            label = "Delete/keep animation length",
+            value = settings.commitAnimationMs,
+            valueRange = 80f..600f,
+            valueLabel = { "${it.roundToInt()} ms" },
+            interactionSource = interactionSource,
+            onChange = { v -> onUpdate { it.copy(commitAnimationMs = v) } }
+        )
+    }
+    item {
+        SettingSlider(
+            label = "Auto-advance to next photo length",
+            value = settings.advanceAnimationMs,
+            valueRange = 100f..800f,
+            valueLabel = { "${it.roundToInt()} ms" },
+            interactionSource = interactionSource,
+            onChange = { v -> onUpdate { it.copy(advanceAnimationMs = v) } }
+        )
+    }
     item { SectionHeader("Video") }
     item {
         androidx.compose.foundation.layout.Row(

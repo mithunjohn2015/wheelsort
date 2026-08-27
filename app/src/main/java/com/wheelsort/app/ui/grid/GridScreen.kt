@@ -135,12 +135,13 @@ fun GridScreen(
                             // drag-select is a separate detector below. Distinguished by pointer
                             // count, so the two coexist without the axis-conflict issues a single-
                             // finger gesture would have against the grid's own scroll.
-                            .pointerInput(hasSelection, photos) {
+                            .pointerInput(hasSelection, photos, columnCount) {
                                 // Shared between the drag-select coroutine and the auto-scroll
                                 // coroutine below - auto-scroll needs to keep running even while
                                 // the finger holds still near an edge, which onDrag alone can't
                                 // do since it only fires on actual movement.
                                 var dragPosition: Offset? = null
+                                var dragStartIndex: Int? = null
                                 var isDragging = false
 
                                 coroutineScope {
@@ -151,11 +152,22 @@ fun GridScreen(
                                     // same touches was very likely why pinch wasn't registering
                                     // reliably; a single node's coroutines cooperate correctly.
                                     launch {
+                                        // zoom here is a per-frame incremental ratio (close to 1.0,
+                                        // e.g. 1.01 for a 1% change since the last callback), not a
+                                        // cumulative total - a flat +-5% per-frame threshold was
+                                        // essentially unreachable during normal pinching, which is
+                                        // why it looked like nothing was happening. Accumulating
+                                        // across the gesture and resetting once a step triggers is
+                                        // the standard pattern for this API.
+                                        var accumulatedZoom = 1f
                                         detectTransformGestures { _, _, zoom, _ ->
-                                            if (zoom > 1.05f) {
+                                            accumulatedZoom *= zoom
+                                            if (accumulatedZoom > 1.25f) {
                                                 columnCount = (columnCount - 1).coerceAtLeast(MIN_COLUMNS)
-                                            } else if (zoom < 0.95f) {
+                                                accumulatedZoom = 1f
+                                            } else if (accumulatedZoom < 0.8f) {
                                                 columnCount = (columnCount + 1).coerceAtMost(MAX_COLUMNS)
+                                                accumulatedZoom = 1f
                                             }
                                         }
                                     }
@@ -172,29 +184,31 @@ fun GridScreen(
                                                 isDragging = true
                                                 dragPosition = pos
                                                 val index = indexAt(gridState, pos) ?: return@detectDragGesturesAfterLongPress
+                                                dragStartIndex = index
                                                 photos.getOrNull(index)?.let { viewModel.ensureSelected(it.id) }
                                             },
-                                            onDragEnd = { isDragging = false; dragPosition = null },
-                                            onDragCancel = { isDragging = false; dragPosition = null },
-                                            onDrag = { change, dragAmount ->
+                                            onDragEnd = { isDragging = false; dragPosition = null; dragStartIndex = null },
+                                            onDragCancel = { isDragging = false; dragPosition = null; dragStartIndex = null },
+                                            onDrag = { change, _ ->
                                                 dragPosition = change.position
-                                                // Selecting only the exact endpoint misses items
-                                                // whenever a fast sweep jumps past several of them
-                                                // between two consecutive drag events - stepping
-                                                // along the path between the previous and current
-                                                // position catches everything the finger crossed,
-                                                // matching how a real "paint select" should feel.
-                                                val to = change.position
-                                                val from = to - dragAmount
-                                                val steps = 6
-                                                for (i in 0..steps) {
-                                                    val t = i / steps.toFloat()
-                                                    val point = Offset(
-                                                        from.x + (to.x - from.x) * t,
-                                                        from.y + (to.y - from.y) * t
-                                                    )
-                                                    val index = indexAt(gridState, point) ?: continue
-                                                    photos.getOrNull(index)?.let { viewModel.ensureSelected(it.id) }
+                                                // Selecting individual items the exact finger path
+                                                // crossed missed most of a row whenever the sweep
+                                                // moved diagonally or fast - Samsung Gallery selects
+                                                // every item in every ROW the drag has covered, not
+                                                // just items directly under the path. Bounded to the
+                                                // swept row range (not the whole list) so this stays
+                                                // cheap even on a very large library.
+                                                val startIndex = dragStartIndex ?: return@detectDragGesturesAfterLongPress
+                                                val currentIndex = indexAt(gridState, change.position)
+                                                    ?: return@detectDragGesturesAfterLongPress
+                                                val startRow = startIndex / columnCount
+                                                val currentRow = currentIndex / columnCount
+                                                val minRow = minOf(startRow, currentRow)
+                                                val maxRow = maxOf(startRow, currentRow)
+                                                val fromIndex = (minRow * columnCount).coerceIn(0, photos.size - 1)
+                                                val toIndex = ((maxRow + 1) * columnCount - 1).coerceIn(0, photos.size - 1)
+                                                for (i in fromIndex..toIndex) {
+                                                    photos.getOrNull(i)?.let { viewModel.ensureSelected(it.id) }
                                                 }
                                             }
                                         )

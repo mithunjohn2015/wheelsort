@@ -24,6 +24,17 @@ import kotlin.math.abs
 
 enum class SwipeAction { KEEP, DELETE }
 
+/** Which media types to include - lets the wheel be scoped to just photos or just videos. */
+enum class MediaTypeFilter { ALL, PHOTOS_ONLY, VIDEOS_ONLY }
+
+/** Sort order and content filters for a review session - now owned by the wheel screen itself
+ *  rather than chosen once on Home before starting, so they can be changed mid-session. */
+data class SortFilters(
+    val newestFirst: Boolean = true,
+    val mediaType: MediaTypeFilter = MediaTypeFilter.ALL,
+    val favoritesOnly: Boolean = false
+)
+
 /**
  * [flushed] = true once this delete has actually been sent to (and accepted by) MediaStore's trash.
  * [removedAtIndex] = list position the photo was removed from, so undo can splice it back exactly
@@ -46,7 +57,8 @@ data class SortUiState(
     val spaceFreed: Long = 0,
     val pendingDeleteCount: Int = 0,
     val isLoading: Boolean = true,
-    val sessionComplete: Boolean = false
+    val sessionComplete: Boolean = false,
+    val filters: SortFilters = SortFilters()
 )
 
 /** Request size used for warming the cache - must exactly match PHOTO_REQUEST_PX in SortScreen.kt,
@@ -73,6 +85,7 @@ class SortViewModel(application: Application) : AndroidViewModel(application) {
     private val pendingQueue = ArrayDeque<Photo>()
     private var lastFlushBatch: List<Photo> = emptyList()
     private var warmAnchor = 0
+    private var currentAlbumFilter: String? = null
 
     /**
      * One-shot events for PROGRAMMATIC scroll requests (undo restoring a photo, etc.) - the wheel
@@ -94,19 +107,36 @@ class SortViewModel(application: Application) : AndroidViewModel(application) {
         warmDispatcher.close()
     }
 
-    fun loadPhotos(albumFilter: String?, newestFirst: Boolean = true) {
-        _uiState.value = _uiState.value.copy(isLoading = true)
+    fun loadPhotos(albumFilter: String?, filters: SortFilters = SortFilters()) {
+        currentAlbumFilter = albumFilter
+        _uiState.value = _uiState.value.copy(isLoading = true, filters = filters)
         warmJob?.cancel()
         viewModelScope.launch(Dispatchers.IO) {
-            val photos = repository.queryActivePhotos(albumFilter, newestFirst)
+            var photos = repository.queryActivePhotos(albumFilter, filters.newestFirst)
+            photos = when (filters.mediaType) {
+                MediaTypeFilter.ALL -> photos
+                MediaTypeFilter.PHOTOS_ONLY -> photos.filterNot { it.isVideo }
+                MediaTypeFilter.VIDEOS_ONLY -> photos.filter { it.isVideo }
+            }
+            if (filters.favoritesOnly) {
+                photos = photos.filter { it.isFavorite }
+            }
             _uiState.value = SortUiState(
                 photos = photos,
                 isLoading = false,
-                sessionComplete = photos.isEmpty()
+                sessionComplete = photos.isEmpty(),
+                filters = filters
             )
             warmAnchor = 0
             startWarming(photos, anchor = 0)
         }
+    }
+
+    /** Changes sort/filter settings mid-session and reloads - the wheel screen now owns this
+     *  directly rather than it being a one-time choice made on Home before starting. */
+    fun updateFilters(transform: (SortFilters) -> SortFilters) {
+        val newFilters = transform(_uiState.value.filters)
+        loadPhotos(currentAlbumFilter, newFilters)
     }
 
     /**

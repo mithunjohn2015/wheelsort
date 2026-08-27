@@ -43,7 +43,7 @@ import kotlinx.coroutines.withContext
 
 @Composable
 fun HomeScreen(
-    onStartSorting: (albumFilter: String?, newestFirst: Boolean) -> Unit,
+    onStartSorting: (albumFilter: String?) -> Unit,
     onOpenTrash: () -> Unit,
     onOpenStats: () -> Unit,
     onOpenOrganize: () -> Unit,
@@ -55,7 +55,6 @@ fun HomeScreen(
     val context = LocalContext.current
     var albums by remember { mutableStateOf<List<String>>(emptyList()) }
     var selectedAlbum by remember { mutableStateOf<String?>(null) }
-    var newestFirst by remember { mutableStateOf(true) }
 
     LaunchedEffect(Unit) {
         albums = withContext(Dispatchers.IO) { PhotoRepository(context).distinctAlbums() }
@@ -102,9 +101,6 @@ fun HomeScreen(
             Column(modifier = Modifier.weight(1f).padding(horizontal = 24.dp)) {
 
             Spacer(Modifier.height(28.dp))
-            SortOrderTabs(newestFirst = newestFirst, onChange = { newestFirst = it })
-
-            Spacer(Modifier.height(16.dp))
             Text(
                 stringResource(R.string.home_choose_album).uppercase(),
                 style = MaterialTheme.typography.labelLarge,
@@ -176,7 +172,7 @@ fun HomeScreen(
                     Text(stringResource(R.string.home_grid))
                 }
                 Button(
-                    onClick = { onStartSorting(selectedAlbum, newestFirst) },
+                    onClick = { onStartSorting(selectedAlbum) },
                     shape = RoundedCornerShape(16.dp),
                     modifier = Modifier.weight(1f).height(56.dp)
                 ) {
@@ -188,39 +184,6 @@ fun HomeScreen(
             Spacer(Modifier.height(20.dp))
             }
         }
-    }
-}
-
-@Composable
-private fun SortOrderTabs(newestFirst: Boolean, onChange: (Boolean) -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .padding(4.dp)
-    ) {
-        SortOrderTab("Newest first", selected = newestFirst, onClick = { onChange(true) }, modifier = Modifier.weight(1f))
-        SortOrderTab("Oldest first", selected = !newestFirst, onClick = { onChange(false) }, modifier = Modifier.weight(1f))
-    }
-}
-
-@Composable
-private fun SortOrderTab(label: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(10.dp))
-            .background(if (selected) MaterialTheme.colorScheme.surface else Color.Transparent)
-            .clickable(onClick = onClick)
-            .padding(vertical = 10.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.labelLarge,
-            color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
-        )
     }
 }
 

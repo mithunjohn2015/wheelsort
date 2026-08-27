@@ -25,7 +25,7 @@ import java.net.URLEncoder
 
 private object Routes {
     const val HOME = "home"
-    const val SORT = "sort?album={album}&newestFirst={newestFirst}"
+    const val SORT = "sort?album={album}"
     const val TRASH = "trash"
     const val STATS = "stats"
     const val ORGANIZE = "organize"
@@ -34,9 +34,9 @@ private object Routes {
     const val DUPLICATES = "duplicates"
     const val SETTINGS = "settings"
 
-    fun sort(album: String?, newestFirst: Boolean): String {
+    fun sort(album: String?): String {
         val encoded = URLEncoder.encode(album ?: "", "UTF-8")
-        return "sort?album=$encoded&newestFirst=$newestFirst"
+        return "sort?album=$encoded"
     }
 
     fun grid(album: String?): String {
@@ -69,8 +69,8 @@ fun WheelSortNavHost() {
     ) {
         composable(Routes.HOME) {
             HomeScreen(
-                onStartSorting = { album, newestFirst ->
-                    navController.navigate(Routes.sort(album, newestFirst))
+                onStartSorting = { album ->
+                    navController.navigate(Routes.sort(album))
                 },
                 onOpenTrash = { navController.navigate(Routes.TRASH) },
                 onOpenStats = { navController.navigate(Routes.STATS) },
@@ -83,17 +83,12 @@ fun WheelSortNavHost() {
         }
         composable(
             route = Routes.SORT,
-            arguments = listOf(
-                navArgument("album") { type = NavType.StringType; defaultValue = "" },
-                navArgument("newestFirst") { type = NavType.BoolType; defaultValue = true }
-            )
+            arguments = listOf(navArgument("album") { type = NavType.StringType; defaultValue = "" })
         ) { backStackEntry ->
             val raw = backStackEntry.arguments?.getString("album").orEmpty()
             val album = if (raw.isBlank()) null else URLDecoder.decode(raw, "UTF-8")
-            val newestFirst = backStackEntry.arguments?.getBoolean("newestFirst") ?: true
             SortScreen(
                 albumFilter = album,
-                newestFirst = newestFirst,
                 onExit = { navController.popBackStack() },
                 onOpenTrash = { navController.navigate(Routes.TRASH) }
             )

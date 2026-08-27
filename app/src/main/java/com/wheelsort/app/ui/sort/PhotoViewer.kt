@@ -178,24 +178,28 @@ fun PhotoViewerOverlay(
                                     Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                             )
                         }
-                        try {
-                            // FLAG_GRANT_READ/WRITE_URI_PERMISSION on the intent itself is the
-                            // correct, standard mechanism here - the system applies it to whichever
-                            // app is actually resolved to handle the intent. A separate manual
-                            // grantUriPermission() call was tried here previously to work around a
-                            // suspected chooser propagation gap, but regular apps generally can't
-                            // grant permissions on MediaStore content they don't own, so that call
-                            // was very likely throwing SecurityException on every attempt - which
-                            // this same broad catch below was reporting as "couldn't open editor"
-                            // even when a perfectly good editor was installed.
-                            context.startActivity(Intent.createChooser(editIntent, "Edit with"))
-                        } catch (_: ActivityNotFoundException) {
-                            // no editor installed - nothing sensible to fall back to
-                            android.widget.Toast.makeText(context, "No photo editor found", android.widget.Toast.LENGTH_SHORT).show()
-                        } catch (_: Exception) {
-                            // Fail gracefully rather than crash - whatever went wrong here isn't
-                            // something the user can act on beyond knowing it didn't work.
-                            android.widget.Toast.makeText(context, "Couldn't open editor", android.widget.Toast.LENGTH_SHORT).show()
+                        // Checking for candidates first, rather than only relying on the exception
+                        // from startActivity, distinguishes "no editor app actually supports this"
+                        // from "something else went wrong" - two attempted fixes without
+                        // confirmation means the next step is seeing what's actually happening
+                        // rather than guessing again.
+                        val candidates = context.packageManager.queryIntentActivities(editIntent, 0)
+                        if (candidates.isEmpty()) {
+                            android.widget.Toast.makeText(
+                                context,
+                                "No installed app supports editing images",
+                                android.widget.Toast.LENGTH_SHORT
+                            ).show()
+                        } else {
+                            try {
+                                context.startActivity(Intent.createChooser(editIntent, "Edit with"))
+                            } catch (e: Exception) {
+                                android.widget.Toast.makeText(
+                                    context,
+                                    "Couldn't open editor: ${e.javaClass.simpleName}",
+                                    android.widget.Toast.LENGTH_LONG
+                                ).show()
+                            }
                         }
                     }) {
                         Icon(Icons.Filled.Edit, contentDescription = "Edit with\u2026", tint = Color.White)

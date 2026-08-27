@@ -46,7 +46,13 @@ data class WheelSettings(
      *  the system's own back-navigation gesture, instead of being claimed as a keep/delete swipe. */
     val edgeMarginDp: Float = 24f,
     /** If true, a video starts playing inline the moment it becomes the centered card, no tap needed. */
-    val autoplayVideos: Boolean = false
+    val autoplayVideos: Boolean = false,
+    /** Persisted so muting once applies to every video, not just the one you muted it on. */
+    val videoMuted: Boolean = false,
+    /** How long the delete dissolve and keep fly-off animations take, in ms. */
+    val commitAnimationMs: Float = 190f,
+    /** How long the automatic scroll to the next photo (after a keep) takes, in ms. */
+    val advanceAnimationMs: Float = 300f
 ) {
     companion object {
         val DEFAULT = WheelSettings()
@@ -75,7 +81,10 @@ class WheelSettingsRepository(context: Context) {
         swipeCommitDistanceFraction = prefs.getFloat(KEY_COMMIT_DIST, WheelSettings.DEFAULT.swipeCommitDistanceFraction),
         swipeCommitVelocity = prefs.getFloat(KEY_COMMIT_VEL, WheelSettings.DEFAULT.swipeCommitVelocity),
         edgeMarginDp = prefs.getFloat(KEY_EDGE_MARGIN, WheelSettings.DEFAULT.edgeMarginDp),
-        autoplayVideos = prefs.getBoolean(KEY_AUTOPLAY, WheelSettings.DEFAULT.autoplayVideos)
+        autoplayVideos = prefs.getBoolean(KEY_AUTOPLAY, WheelSettings.DEFAULT.autoplayVideos),
+        videoMuted = prefs.getBoolean(KEY_MUTED, WheelSettings.DEFAULT.videoMuted),
+        commitAnimationMs = prefs.getFloat(KEY_COMMIT_ANIM_MS, WheelSettings.DEFAULT.commitAnimationMs),
+        advanceAnimationMs = prefs.getFloat(KEY_ADVANCE_ANIM_MS, WheelSettings.DEFAULT.advanceAnimationMs)
     )
 
     fun save(settings: WheelSettings) {
@@ -93,6 +102,9 @@ class WheelSettingsRepository(context: Context) {
             .putFloat(KEY_COMMIT_VEL, settings.swipeCommitVelocity)
             .putFloat(KEY_EDGE_MARGIN, settings.edgeMarginDp)
             .putBoolean(KEY_AUTOPLAY, settings.autoplayVideos)
+            .putBoolean(KEY_MUTED, settings.videoMuted)
+            .putFloat(KEY_COMMIT_ANIM_MS, settings.commitAnimationMs)
+            .putFloat(KEY_ADVANCE_ANIM_MS, settings.advanceAnimationMs)
             .apply()
     }
 
@@ -114,5 +126,8 @@ class WheelSettingsRepository(context: Context) {
         const val KEY_COMMIT_VEL = "commit_vel"
         const val KEY_EDGE_MARGIN = "edge_margin"
         const val KEY_AUTOPLAY = "autoplay_videos"
+        const val KEY_MUTED = "video_muted"
+        const val KEY_COMMIT_ANIM_MS = "commit_anim_ms"
+        const val KEY_ADVANCE_ANIM_MS = "advance_anim_ms"
     }
 }

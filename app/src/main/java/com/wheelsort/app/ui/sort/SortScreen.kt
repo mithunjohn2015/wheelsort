@@ -30,11 +30,14 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Undo
+import androidx.compose.material.icons.filled.VolumeOff
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -73,13 +76,13 @@ import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.pow
+import kotlin.math.roundToInt
 
 private enum class SortPhase { LOADING, COMPLETE, WHEEL }
 
 @Composable
 fun SortScreen(
     albumFilter: String?,
-    newestFirst: Boolean = true,
     onExit: () -> Unit,
     onOpenTrash: () -> Unit,
     viewModel: SortViewModel = viewModel(),
@@ -89,6 +92,7 @@ fun SortScreen(
     val wheelSettings by settingsViewModel.settings.collectAsState()
     var viewerPhoto by remember { mutableStateOf<Photo?>(null) }
     var showSettingsOverlay by remember { mutableStateOf(false) }
+    var showFilterOverlay by remember { mutableStateOf(false) }
 
     var isFlushing by remember { mutableStateOf(false) }
     var afterFlush by remember { mutableStateOf<(() -> Unit)?>(null) }
@@ -124,8 +128,11 @@ fun SortScreen(
         if (viewModel.uiState.value.pendingDeleteCount > 0) performFlush(then = onOpenTrash) else onOpenTrash()
     }
 
-    LaunchedEffect(albumFilter, newestFirst) {
-        viewModel.loadPhotos(albumFilter, newestFirst)
+    // Sort order and content filters now live entirely inside the wheel screen - this only
+    // fires again if the ALBUM changes (a different review session), not on every filter tweak,
+    // since updateFilters() (called from the filter overlay) already handles those reloads itself.
+    LaunchedEffect(albumFilter) {
+        viewModel.loadPhotos(albumFilter)
     }
 
     Scaffold(
@@ -135,6 +142,7 @@ fun SortScreen(
                 total = uiState.photos.size,
                 onExit = ::handleExit,
                 onOpenSettings = { showSettingsOverlay = true },
+                onOpenFilters = { showFilterOverlay = true },
                 onUndo = {
                     val entry = viewModel.undoLast()
                     if (entry != null && entry.action == SwipeAction.DELETE && entry.flushed) {
@@ -173,6 +181,7 @@ fun SortScreen(
                         onCenterIndexChanged = { index -> viewModel.setCurrentIndex(index) },
                         onTapCenter = { photo -> viewerPhoto = photo },
                         onOpenTrash = ::handleOpenTrash,
+                        onToggleMuted = { settingsViewModel.update { it.copy(videoMuted = !it.videoMuted) } },
                         pendingDeleteCount = uiState.pendingDeleteCount
                     )
                 }
@@ -206,7 +215,25 @@ fun SortScreen(
         )
     }
 
-    BackHandler(onBack = { if (showSettingsOverlay) showSettingsOverlay = false else handleExit() })
+    androidx.compose.animation.AnimatedVisibility(
+        visible = showFilterOverlay,
+        enter = androidx.compose.animation.fadeIn(tween(180)),
+        exit = androidx.compose.animation.fadeOut(tween(180))
+    ) {
+        SortFilterOverlay(
+            filters = uiState.filters,
+            onUpdate = viewModel::updateFilters,
+            onClose = { showFilterOverlay = false }
+        )
+    }
+
+    BackHandler(onBack = {
+        when {
+            showSettingsOverlay -> showSettingsOverlay = false
+            showFilterOverlay -> showFilterOverlay = false
+            else -> handleExit()
+        }
+    })
 }
 
 @Composable
@@ -215,6 +242,7 @@ private fun SortTopBar(
     total: Int,
     onExit: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenFilters: () -> Unit,
     onUndo: () -> Unit
 ) {
     Column {
@@ -237,6 +265,9 @@ private fun SortTopBar(
                 }
             },
             actions = {
+                IconButton(onClick = onOpenFilters) {
+                    Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = "Sort & filter")
+                }
                 IconButton(onClick = onOpenSettings) {
                     Icon(Icons.Filled.Tune, contentDescription = "Wheel settings")
                 }
@@ -332,6 +363,7 @@ private fun WheelCarousel(
     onCenterIndexChanged: (Int) -> Unit,
     onTapCenter: (Photo) -> Unit,
     onOpenTrash: () -> Unit,
+    onToggleMuted: () -> Unit,
     pendingDeleteCount: Int
 ) {
     val photos = uiState.photos
@@ -348,6 +380,10 @@ private fun WheelCarousel(
     val latestState = rememberUpdatedState(uiState)
 
     val dragOffsetX = remember { Animatable(0f) }
+    // Fades the center card out on delete, so it visibly dissolves away rather than just flying
+    // off - keep still uses the horizontal fly-off (dragOffsetX), since that motion reads fine
+    // for "set aside", but a deletion should look like the photo is actually disappearing.
+    val dragAlpha = remember { Animatable(1f) }
 
     // Single source of truth for "which photo is active" - whichever item is currently nearest
     // the viewport's vertical center. Recomputed only when the underlying scroll state actually
@@ -362,6 +398,18 @@ private fun WheelCarousel(
     }
 
     LaunchedEffect(centeredIndex) { onCenterIndexChanged(centeredIndex) }
+
+    // Which way the user was actually browsing just before a keep/delete decision - so the
+    // automatic advance afterward continues in that same direction (e.g. if you were flicking
+    // down to bring photos in from above, the next one after a decision should also arrive from
+    // above) rather than always moving forward regardless of how you got there.
+    var lastScrollDirection by remember { mutableIntStateOf(1) }
+    var previousCenteredIndex by remember { mutableIntStateOf(centeredIndex) }
+    LaunchedEffect(centeredIndex) {
+        if (centeredIndex > previousCenteredIndex) lastScrollDirection = 1
+        else if (centeredIndex < previousCenteredIndex) lastScrollDirection = -1
+        previousCenteredIndex = centeredIndex
+    }
 
     // Programmatic scroll requests (undo restoring a photo) - separate from the reactive sync
     // above, which only flows the other direction (user scroll -> ViewModel).
@@ -442,30 +490,48 @@ private fun WheelCarousel(
                             when {
                                 right -> {
                                     haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    val durationMs = s.commitAnimationMs.roundToInt()
                                     scope.launch {
                                         dragOffsetX.animateTo(
                                             targetValue = widthPx * 1.4f,
-                                            animationSpec = tween(190, easing = FastOutLinearInEasing)
+                                            animationSpec = tween(durationMs, easing = FastOutLinearInEasing)
                                         )
                                         dragOffsetX.snapTo(0f)
                                     }
-                                    scope.launch { listState.animateScrollBy(latestItemHeightPx.value) }
+                                    scope.launch {
+                                        listState.animateScrollBy(
+                                            latestItemHeightPx.value * lastScrollDirection,
+                                            animationSpec = tween(s.advanceAnimationMs.roundToInt())
+                                        )
+                                    }
                                     onCommitKeep(photo)
                                 }
                                 left -> {
                                     haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    val durationMs = s.commitAnimationMs.roundToInt()
+                                    // Dissolves in place (fade + shrink) rather than flying off -
+                                    // reads as the photo actually disappearing, which fits a
+                                    // deletion much better than a "set aside" motion would.
+                                    // Crucially, onCommitDelete (which actually removes the photo
+                                    // from the list) now waits until BOTH animations have fully
+                                    // finished, rather than firing immediately alongside them -
+                                    // removing the item from the underlying list mid-animation
+                                    // was letting LazyColumn tear the card out of composition
+                                    // before the fade had a chance to actually play out.
                                     scope.launch {
-                                        dragOffsetX.animateTo(
-                                            targetValue = -widthPx * 1.4f,
-                                            animationSpec = tween(190, easing = FastOutLinearInEasing)
-                                        )
+                                        coroutineScope {
+                                            launch { dragAlpha.animateTo(0f, animationSpec = tween(durationMs)) }
+                                            launch {
+                                                dragOffsetX.animateTo(
+                                                    targetValue = dragOffsetX.value * 0.3f,
+                                                    animationSpec = tween(durationMs, easing = FastOutLinearInEasing)
+                                                )
+                                            }
+                                        }
+                                        onCommitDelete(photo)
+                                        dragAlpha.snapTo(1f)
                                         dragOffsetX.snapTo(0f)
                                     }
-                                    // Deleting removes the photo from the list, which shifts
-                                    // every later index down by one - the item that was next
-                                    // naturally reflows into this same visual position, so no
-                                    // explicit scroll is needed here (unlike the keep case).
-                                    onCommitDelete(photo)
                                 }
                                 else -> scope.launch { springBack() }
                             }
@@ -578,17 +644,17 @@ private fun WheelCarousel(
                                             // Deliberately NOT using rotationX/cameraDistance (true 3D
                                             // rotation) - this exact combination caused a GPU-specific
                                             // transparent-card bug earlier in this project. This fakes
-                                            // a similar "turning edge-on and flipping away" look safely
-                                            // by squeezing scaleX toward zero instead of tilting in 3D.
-                                            // Deliberately NOT combined with the general shrink-per-
-                                            // level `scale` - multiplying the two together diluted the
-                                            // squeeze into looking like plain shrinking with a slight
-                                            // tilt, rather than reading as an actual flip. Pushed to
-                                            // near-90 degrees so peek cards visibly turn edge-on rather
-                                            // than just leaning.
-                                            val angleDeg = (signedDistance * 85f).coerceIn(-89f, 89f)
-                                            val angleRad = angleDeg * (kotlin.math.PI.toFloat() / 180f)
-                                            scaleX = cos(angleRad).coerceAtLeast(0.02f)
+                                            // a genuine full 360-degree flip safely using scaleX alone:
+                                            // cos() naturally cycles positive -> zero -> negative ->
+                                            // zero -> positive as the angle sweeps through a complete
+                                            // turn. The negative values mirror the card horizontally,
+                                            // which is exactly what a real flip briefly shows as the
+                                            // "back" of the card comes around mid-rotation - not a bug,
+                                            // that's what makes it read as an actual flip instead of a
+                                            // card that just tips to edge-on and stops. One full unit
+                                            // of distance from center is one complete rotation.
+                                            val angleRad = signedDistance * 2f * kotlin.math.PI.toFloat()
+                                            scaleX = cos(angleRad)
                                             scaleY = 1f
                                             translationY = signedDistance * itemSpacingPx * 0.6f
                                         }
@@ -607,6 +673,7 @@ private fun WheelCarousel(
                                     if (isCentered) {
                                         translationX = dragOffsetX.value
                                         rotationZ = (dragOffsetX.value / 38f).coerceIn(-16f, 16f)
+                                        alpha = dragAlpha.value
                                     }
                                 }
                         ) {
@@ -617,7 +684,9 @@ private fun WheelCarousel(
                                 glowStrength = if (isCentered) dragProgress else 0f,
                                 dimProvider = { levelDim(centerDistance(listState, index), settings.dimPerLevel, settings.maxDim) },
                                 isCentered = isCentered,
-                                autoplay = settings.autoplayVideos
+                                autoplay = settings.autoplayVideos,
+                                muted = settings.videoMuted,
+                                onToggleMuted = onToggleMuted
                             )
                         }
                     }
@@ -717,38 +786,48 @@ private fun TrashBinButton(pendingCount: Int, onClick: () -> Unit, modifier: Mod
 }
 
 /**
- * Plays a video inline using android.widget.VideoView (wrapped for Compose via AndroidView) -
- * the built-in Android video widget, chosen deliberately over adding an ExoPlayer dependency for
- * what's a single, simple use case. Tapping the video pauses it back to the static thumbnail.
- * [onEnded] fires when playback finishes naturally, so the caller can revert to the thumbnail too.
+ * Plays a video inline using ExoPlayer + PlayerView, rendered via TextureView rather than the
+ * default SurfaceView. SurfaceView punches a hole in the window's compositing rather than
+ * drawing as a normal layer, and is known to leave stale/black content behind when removed or
+ * recomposed inside a Compose tree - that's what was causing the black tile after a video
+ * finished playing, with no way to recover short of restarting the screen. TextureView composites
+ * as an ordinary view and doesn't have this problem. The controller (play/pause, seek bar) is
+ * PlayerView's own built-in UI, configured via the layout XML rather than hand-built.
  */
 @Composable
 private fun InlineVideoPlayer(
     uri: android.net.Uri,
-    onTap: () -> Unit,
-    onEnded: () -> Unit,
+    muted: Boolean,
     modifier: Modifier = Modifier
 ) {
-    val currentOnEnded = rememberUpdatedState(onEnded)
-    Box(
-        modifier = modifier.clickable(
-            indication = null,
-            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-        ) { onTap() }
-    ) {
-        androidx.compose.ui.viewinterop.AndroidView(
-            factory = { context ->
-                android.widget.VideoView(context).apply {
-                    setVideoURI(uri)
-                    setOnPreparedListener { mp -> mp.start() }
-                    setOnCompletionListener { currentOnEnded.value() }
-                    setOnErrorListener { _, _, _ -> currentOnEnded.value(); true }
-                }
-            },
-            modifier = Modifier.fillMaxSize(),
-            onRelease = { view -> view.stopPlayback() }
-        )
+    val context = LocalContext.current
+
+    val exoPlayer = remember(uri) {
+        androidx.media3.exoplayer.ExoPlayer.Builder(context).build().apply {
+            setMediaItem(androidx.media3.common.MediaItem.fromUri(uri))
+            repeatMode = androidx.media3.common.Player.REPEAT_MODE_ONE
+            prepare()
+            playWhenReady = true
+        }
     }
+
+    DisposableEffect(exoPlayer) {
+        onDispose { exoPlayer.release() }
+    }
+
+    LaunchedEffect(muted) {
+        exoPlayer.volume = if (muted) 0f else 1f
+    }
+
+    androidx.compose.ui.viewinterop.AndroidView(
+        factory = { ctx ->
+            (android.view.LayoutInflater.from(ctx)
+                .inflate(com.wheelsort.app.R.layout.player_view_texture, null) as androidx.media3.ui.PlayerView)
+                .apply { player = exoPlayer }
+        },
+        modifier = modifier,
+        onRelease = { view -> view.player = null }
+    )
 }
 
 /**
@@ -774,7 +853,9 @@ private fun PhotoCard(
     glowStrength: Float = 0f,
     dimProvider: () -> Float = { 0f },
     isCentered: Boolean = false,
-    autoplay: Boolean = false
+    autoplay: Boolean = false,
+    muted: Boolean = false,
+    onToggleMuted: () -> Unit = {}
 ) {
     val shadowColor = if (glowColor != null) glowColor.copy(alpha = 0.85f) else NEUTRAL_SHADOW
     val elevation = lerp(8.dp, 26.dp, glowStrength.coerceIn(0f, 1f))
@@ -805,10 +886,11 @@ private fun PhotoCard(
     ) {
         Box {
             if (photo.isVideo && isCentered && isPlaying) {
+                // No onTap/onEnded needed anymore - PlayerView's own built-in controller handles
+                // play/pause and seeking, and looping means playback never naturally "ends".
                 InlineVideoPlayer(
                     uri = photo.uri,
-                    onTap = { isPlaying = false },
-                    onEnded = { isPlaying = false },
+                    muted = muted,
                     modifier = Modifier.fillMaxSize()
                 )
             } else {
@@ -825,6 +907,22 @@ private fun PhotoCard(
                     .graphicsLayer { alpha = dimProvider().coerceIn(0f, 1f) }
                     .background(Color.Black)
             )
+            if (photo.isVideo && isCentered && isPlaying) {
+                // Mute toggle - PlayerView's default controller doesn't include one, and it's
+                // needed regardless of whether the controller is currently visible/tapped-away.
+                IconButton(
+                    onClick = onToggleMuted,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(6.dp)
+                ) {
+                    Icon(
+                        if (muted) Icons.Filled.VolumeOff else Icons.Filled.VolumeUp,
+                        contentDescription = if (muted) "Unmute" else "Mute",
+                        tint = Color.White
+                    )
+                }
+            }
             if (photo.isVideo && !isPlaying) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Box(
