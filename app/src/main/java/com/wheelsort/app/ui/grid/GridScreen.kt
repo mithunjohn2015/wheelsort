@@ -4,6 +4,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -14,10 +15,11 @@ import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
@@ -125,6 +127,8 @@ fun GridScreen(
                     val selected = uiState.selected
                     val hasSelection = selected.isNotEmpty()
 
+                    val latestUiState = rememberUpdatedState(uiState)
+
                     LazyVerticalGrid(
                         state = gridState,
                         columns = GridCells.Fixed(columnCount),
@@ -135,7 +139,18 @@ fun GridScreen(
                             // drag-select is a separate detector below. Distinguished by pointer
                             // count, so the two coexist without the axis-conflict issues a single-
                             // finger gesture would have against the grid's own scroll.
-                            .pointerInput(hasSelection, photos, columnCount) {
+                            //
+                            // Keyed on Unit deliberately - this block used to be keyed on
+                            // hasSelection/photos/columnCount, but this SAME block is what changes
+                            // hasSelection (selecting an item) and columnCount (pinching). Keying
+                            // on values the handler itself mutates meant every successful pinch
+                            // step or every first selection tore the whole detector down and
+                            // restarted it mid-gesture, cancelling whatever was in progress - a
+                            // pinch could get through at most one step, and a drag-select died the
+                            // instant the first item was selected, before any sweep could happen.
+                            // rememberUpdatedState below provides fresh reads instead, so nothing
+                            // needs a restart to stay current.
+                            .pointerInput(Unit) {
                                 // Shared between the drag-select coroutine and the auto-scroll
                                 // coroutine below - auto-scroll needs to keep running even while
                                 // the finger holds still near an edge, which onDrag alone can't
@@ -146,19 +161,16 @@ fun GridScreen(
 
                                 coroutineScope {
                                     // Pinch to resize the grid. Distinguished from the single-
-                                    // finger gestures below by pointer count, and now sharing this
+                                    // finger gestures below by pointer count, and sharing this
                                     // same pointerInput block rather than a separate one - two
                                     // independent pointerInput nodes both trying to interpret the
-                                    // same touches was very likely why pinch wasn't registering
-                                    // reliably; a single node's coroutines cooperate correctly.
+                                    // same touches was unreliable; a single node's coroutines
+                                    // cooperate correctly.
                                     launch {
                                         // zoom here is a per-frame incremental ratio (close to 1.0,
                                         // e.g. 1.01 for a 1% change since the last callback), not a
-                                        // cumulative total - a flat +-5% per-frame threshold was
-                                        // essentially unreachable during normal pinching, which is
-                                        // why it looked like nothing was happening. Accumulating
-                                        // across the gesture and resetting once a step triggers is
-                                        // the standard pattern for this API.
+                                        // cumulative total - accumulating across the gesture and
+                                        // resetting once a step triggers is the correct pattern.
                                         var accumulatedZoom = 1f
                                         detectTransformGestures { _, _, zoom, _ ->
                                             accumulatedZoom *= zoom
@@ -173,9 +185,10 @@ fun GridScreen(
                                     }
                                     launch {
                                         detectTapGestures(onTap = { pos ->
+                                            val state = latestUiState.value
                                             val index = indexAt(gridState, pos) ?: return@detectTapGestures
-                                            val photo = photos.getOrNull(index) ?: return@detectTapGestures
-                                            if (hasSelection) viewModel.toggleSelect(photo.id) else viewerPhoto = photo
+                                            val photo = state.photos.getOrNull(index) ?: return@detectTapGestures
+                                            if (state.selected.isNotEmpty()) viewModel.toggleSelect(photo.id) else viewerPhoto = photo
                                         })
                                     }
                                     launch {
@@ -185,19 +198,17 @@ fun GridScreen(
                                                 dragPosition = pos
                                                 val index = indexAt(gridState, pos) ?: return@detectDragGesturesAfterLongPress
                                                 dragStartIndex = index
-                                                photos.getOrNull(index)?.let { viewModel.ensureSelected(it.id) }
+                                                latestUiState.value.photos.getOrNull(index)?.let { viewModel.ensureSelected(it.id) }
                                             },
                                             onDragEnd = { isDragging = false; dragPosition = null; dragStartIndex = null },
                                             onDragCancel = { isDragging = false; dragPosition = null; dragStartIndex = null },
                                             onDrag = { change, _ ->
                                                 dragPosition = change.position
-                                                // Selecting individual items the exact finger path
-                                                // crossed missed most of a row whenever the sweep
-                                                // moved diagonally or fast - Samsung Gallery selects
-                                                // every item in every ROW the drag has covered, not
-                                                // just items directly under the path. Bounded to the
-                                                // swept row range (not the whole list) so this stays
-                                                // cheap even on a very large library.
+                                                // Samsung Gallery selects every item in every ROW
+                                                // the drag has swept across, not just items the
+                                                // exact finger path crossed - bounded to the swept
+                                                // row range so this stays cheap on a large library.
+                                                val photos = latestUiState.value.photos
                                                 val startIndex = dragStartIndex ?: return@detectDragGesturesAfterLongPress
                                                 val currentIndex = indexAt(gridState, change.position)
                                                     ?: return@detectDragGesturesAfterLongPress
@@ -277,20 +288,36 @@ fun GridScreen(
                                         )
                                     }
                                 }
-                                if (isSelected) {
+                                if (hasSelection) {
+                                    // Circular checkbox, always visible once selection mode is
+                                    // active (not just on selected items) - outlined and empty
+                                    // when unselected, filled with a checkmark when selected.
                                     Box(
-                                        Modifier
-                                            .fillMaxSize()
-                                            .background(Color.Black.copy(alpha = 0.35f))
-                                    )
-                                    Icon(
-                                        Icons.Filled.CheckCircle,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.primary,
                                         modifier = Modifier
-                                            .align(Alignment.TopEnd)
-                                            .padding(4.dp)
-                                    )
+                                            .align(Alignment.TopStart)
+                                            .padding(6.dp)
+                                            .size(22.dp)
+                                            .clip(CircleShape)
+                                            .background(
+                                                if (isSelected) MaterialTheme.colorScheme.primary
+                                                else Color.Black.copy(alpha = 0.32f)
+                                            )
+                                            .then(
+                                                if (!isSelected) {
+                                                    Modifier.border(1.5.dp, Color.White.copy(alpha = 0.85f), CircleShape)
+                                                } else Modifier
+                                            ),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        if (isSelected) {
+                                            Icon(
+                                                Icons.Filled.Check,
+                                                contentDescription = null,
+                                                tint = Color.White,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }

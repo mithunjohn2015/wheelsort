@@ -384,6 +384,13 @@ private fun WheelCarousel(
     // off - keep still uses the horizontal fly-off (dragOffsetX), since that motion reads fine
     // for "set aside", but a deletion should look like the photo is actually disappearing.
     val dragAlpha = remember { Animatable(1f) }
+    // Scales the card during a commit - shrinks toward nothing for delete (an implosion, not
+    // just a fade) and gives keep a quick punch-up pulse right before it launches off, so the
+    // moment of commit itself feels deliberate rather than the motion just starting cold.
+    val dragScale = remember { Animatable(1f) }
+    // Extra spin added on top of the normal drag-tilt, only during a keep's fly-off - a card
+    // tossed aside with a little flourish reads as more decisive than a straight-line exit.
+    val dragSpin = remember { Animatable(0f) }
 
     // Single source of truth for "which photo is active" - whichever item is currently nearest
     // the viewport's vertical center. Recomputed only when the underlying scroll state actually
@@ -398,6 +405,12 @@ private fun WheelCarousel(
     }
 
     LaunchedEffect(centeredIndex) { onCenterIndexChanged(centeredIndex) }
+
+    // True while the centered card is actively playing a video inline. The wheel's swipe
+    // detector checks this and backs off entirely while it's true, so a video's own seek bar
+    // (and any other touch interaction on the player) works normally instead of the swipe
+    // detector claiming horizontal drags on it as keep/delete attempts.
+    var centeredVideoPlaying by remember { mutableStateOf(false) }
 
     // Which way the user was actually browsing just before a keep/delete decision - so the
     // automatic advance afterward continues in that same direction (e.g. if you were flicking
@@ -491,12 +504,30 @@ private fun WheelCarousel(
                                 right -> {
                                     haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                                     val durationMs = s.commitAnimationMs.roundToInt()
+                                    val pulseMs = (durationMs * 0.28f).roundToInt().coerceAtLeast(40)
+                                    val flightMs = (durationMs - pulseMs).coerceAtLeast(60)
                                     scope.launch {
-                                        dragOffsetX.animateTo(
-                                            targetValue = widthPx * 1.4f,
-                                            animationSpec = tween(durationMs, easing = FastOutLinearInEasing)
-                                        )
+                                        // Quick punch-up right at the moment of commit - a small,
+                                        // fast pulse before the card actually starts moving, so
+                                        // the decision itself has a beat of weight to it.
+                                        dragScale.animateTo(1.1f, animationSpec = tween(pulseMs, easing = FastOutLinearInEasing))
+                                        coroutineScope {
+                                            launch {
+                                                dragOffsetX.animateTo(
+                                                    targetValue = widthPx * 1.5f,
+                                                    animationSpec = tween(flightMs, easing = FastOutLinearInEasing)
+                                                )
+                                            }
+                                            launch {
+                                                dragScale.animateTo(0.82f, animationSpec = tween(flightMs, easing = FastOutLinearInEasing))
+                                            }
+                                            launch {
+                                                dragSpin.animateTo(22f, animationSpec = tween(flightMs, easing = FastOutLinearInEasing))
+                                            }
+                                        }
                                         dragOffsetX.snapTo(0f)
+                                        dragScale.snapTo(1f)
+                                        dragSpin.snapTo(0f)
                                     }
                                     scope.launch {
                                         listState.animateScrollBy(
@@ -509,27 +540,41 @@ private fun WheelCarousel(
                                 left -> {
                                     haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                                     val durationMs = s.commitAnimationMs.roundToInt()
-                                    // Dissolves in place (fade + shrink) rather than flying off -
-                                    // reads as the photo actually disappearing, which fits a
-                                    // deletion much better than a "set aside" motion would.
-                                    // Crucially, onCommitDelete (which actually removes the photo
-                                    // from the list) now waits until BOTH animations have fully
-                                    // finished, rather than firing immediately alongside them -
-                                    // removing the item from the underlying list mid-animation
-                                    // was letting LazyColumn tear the card out of composition
-                                    // before the fade had a chance to actually play out.
+                                    // A genuine implosion - shrinking toward a point while fading
+                                    // and rotating slightly - rather than just a flat fade, so
+                                    // delete has real character as a distinct "vanishing" motion,
+                                    // not merely a dimmer version of keep. onCommitDelete (which
+                                    // actually removes the photo from the list) waits until every
+                                    // animation has fully finished before firing - removing the
+                                    // item from the underlying list mid-animation was letting
+                                    // LazyColumn tear the card out of composition before the
+                                    // effect had a chance to actually play out.
                                     scope.launch {
                                         coroutineScope {
                                             launch { dragAlpha.animateTo(0f, animationSpec = tween(durationMs)) }
                                             launch {
+                                                dragScale.animateTo(
+                                                    0.15f,
+                                                    animationSpec = tween(durationMs, easing = FastOutLinearInEasing)
+                                                )
+                                            }
+                                            launch {
+                                                dragSpin.animateTo(
+                                                    if (dragOffsetX.value <= 0f) -50f else 50f,
+                                                    animationSpec = tween(durationMs, easing = FastOutLinearInEasing)
+                                                )
+                                            }
+                                            launch {
                                                 dragOffsetX.animateTo(
-                                                    targetValue = dragOffsetX.value * 0.3f,
+                                                    targetValue = dragOffsetX.value * 0.25f,
                                                     animationSpec = tween(durationMs, easing = FastOutLinearInEasing)
                                                 )
                                             }
                                         }
                                         onCommitDelete(photo)
                                         dragAlpha.snapTo(1f)
+                                        dragScale.snapTo(1f)
+                                        dragSpin.snapTo(0f)
                                         dragOffsetX.snapTo(0f)
                                     }
                                 }
@@ -556,6 +601,13 @@ private fun WheelCarousel(
                                 // losing to scroll instead of just changing where the detector lives.
                                 awaitEachGesture {
                                     val down = awaitFirstDown(pass = PointerEventPass.Initial)
+
+                                    // While a video is playing inline, its own seek bar and
+                                    // controls need every touch - this detector backs off
+                                    // completely rather than claiming horizontal drags on it as a
+                                    // keep/delete swipe attempt, which is what was breaking the
+                                    // seek bar (dragging it was being read as "swipe left/right").
+                                    if (centeredVideoPlaying) return@awaitEachGesture
 
                                     // Leave a margin at the screen edges for the system's own
                                     // back-navigation swipe - without this, this detector claims
@@ -651,12 +703,25 @@ private fun WheelCarousel(
                                             // which is exactly what a real flip briefly shows as the
                                             // "back" of the card comes around mid-rotation - not a bug,
                                             // that's what makes it read as an actual flip instead of a
-                                            // card that just tips to edge-on and stops. One full unit
-                                            // of distance from center is one complete rotation.
-                                            val angleRad = signedDistance * 2f * kotlin.math.PI.toFloat()
-                                            scaleX = cos(angleRad)
-                                            scaleY = 1f
+                                            // card that just tips to edge-on and stops.
+                                            //
+                                            // Only cards that are NOT the current center ever flip -
+                                            // the centered card always renders flat. signedDistance is
+                                            // continuous, so during an active scroll the about-to-be-
+                                            // centered card would otherwise still show a sliver of
+                                            // rotation right up until the crossover; gating on the
+                                            // discrete isCentered flag instead keeps "the middle one"
+                                            // always flat, with only the peek cards above and below it
+                                            // doing the actual flipping.
                                             translationY = signedDistance * itemSpacingPx * 0.6f
+                                            if (isCentered) {
+                                                scaleX = 1f
+                                                scaleY = 1f
+                                            } else {
+                                                val angleRad = signedDistance * 2f * kotlin.math.PI.toFloat()
+                                                scaleX = cos(angleRad)
+                                                scaleY = 1f
+                                            }
                                         }
                                         com.wheelsort.app.data.WheelTransitionStyle.SLIDE -> {
                                             // Distinct from STACK's aggressive shrink+peek - a light,
@@ -672,8 +737,10 @@ private fun WheelCarousel(
 
                                     if (isCentered) {
                                         translationX = dragOffsetX.value
-                                        rotationZ = (dragOffsetX.value / 38f).coerceIn(-16f, 16f)
+                                        rotationZ = (dragOffsetX.value / 38f).coerceIn(-16f, 16f) + dragSpin.value
                                         alpha = dragAlpha.value
+                                        scaleX *= dragScale.value
+                                        scaleY *= dragScale.value
                                     }
                                 }
                         ) {
@@ -686,7 +753,9 @@ private fun WheelCarousel(
                                 isCentered = isCentered,
                                 autoplay = settings.autoplayVideos,
                                 muted = settings.videoMuted,
-                                onToggleMuted = onToggleMuted
+                                onToggleMuted = onToggleMuted,
+                                isPlaying = isCentered && centeredVideoPlaying,
+                                onPlayingChange = { playing -> if (isCentered) centeredVideoPlaying = playing }
                             )
                         }
                     }
@@ -843,7 +912,11 @@ private fun InlineVideoPlayer(
  *
  * [isCentered] and [autoplay] together control inline video playback: only the centered card
  * ever plays inline (never more than one video decoding at once), and autoplay starts it the
- * moment it becomes centered rather than requiring a tap.
+ * moment it becomes centered rather than requiring a tap. [isPlaying]/[onPlayingChange] are
+ * controlled (not local state) because the wheel-level gesture detector needs to know whether a
+ * video is currently playing, so it can back off entirely and let the video's own seek bar
+ * handle touches - otherwise the wheel's swipe detector claims the seek bar's horizontal drags
+ * as a keep/delete swipe attempt before the player ever sees them.
  */
 @Composable
 private fun PhotoCard(
@@ -855,20 +928,21 @@ private fun PhotoCard(
     isCentered: Boolean = false,
     autoplay: Boolean = false,
     muted: Boolean = false,
-    onToggleMuted: () -> Unit = {}
+    onToggleMuted: () -> Unit = {},
+    isPlaying: Boolean = false,
+    onPlayingChange: (Boolean) -> Unit = {}
 ) {
     val shadowColor = if (glowColor != null) glowColor.copy(alpha = 0.85f) else NEUTRAL_SHADOW
     val elevation = lerp(8.dp, 26.dp, glowStrength.coerceIn(0f, 1f))
-    var isPlaying by remember(photo.id) { mutableStateOf(false) }
 
     // Only ever plays while this specific card is actually centered - scrolling away always
     // stops it immediately, so at most one video is ever decoding/playing at a time regardless
     // of how it was started (tap or autoplay).
     LaunchedEffect(isCentered, photo.id) {
         if (!isCentered) {
-            isPlaying = false
+            onPlayingChange(false)
         } else if (photo.isVideo && autoplay) {
-            isPlaying = true
+            onPlayingChange(true)
         }
     }
 
@@ -935,7 +1009,7 @@ private fun PhotoCard(
                                     Modifier.clickable(
                                         indication = null,
                                         interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-                                    ) { isPlaying = true }
+                                    ) { onPlayingChange(true) }
                                 } else Modifier
                             ),
                         contentAlignment = Alignment.Center
