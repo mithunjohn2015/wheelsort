@@ -64,8 +64,11 @@ dependencies {
     implementation("androidx.exifinterface:exifinterface:1.3.7")
 
     implementation("io.coil-kt:coil-compose:2.6.0")
-    implementation("androidx.media3:media3-exoplayer:1.11.0")
-    implementation("androidx.media3:media3-ui:1.11.0")
+    // 1.11.0 requires compileSdk 36, which this project's AGP version (8.5.2) doesn't support -
+    // 1.4.1 is confirmed (via a real build log) to only require compileSdk 34, matching what
+    // this project actually has, without needing to touch AGP/compileSdk for this alone.
+    implementation("androidx.media3:media3-exoplayer:1.4.1")
+    implementation("androidx.media3:media3-ui:1.4.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
