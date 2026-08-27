@@ -38,6 +38,7 @@ class PhotoRepository(private val context: Context) {
         MediaStore.Images.Media.DISPLAY_NAME,
         MediaStore.Images.Media.DATE_ADDED,
         MediaStore.Images.Media.DATE_TAKEN,
+        MediaStore.Images.Media.DATE_MODIFIED,
         MediaStore.Images.Media.SIZE,
         MediaStore.Images.Media.BUCKET_DISPLAY_NAME,
         MediaStore.Images.Media.WIDTH,
@@ -50,6 +51,7 @@ class PhotoRepository(private val context: Context) {
         MediaStore.Video.Media.DISPLAY_NAME,
         MediaStore.Video.Media.DATE_ADDED,
         MediaStore.Video.Media.DATE_TAKEN,
+        MediaStore.Video.Media.DATE_MODIFIED,
         MediaStore.Video.Media.SIZE,
         MediaStore.Video.Media.BUCKET_DISPLAY_NAME,
         MediaStore.Video.Media.WIDTH,
@@ -73,11 +75,17 @@ class PhotoRepository(private val context: Context) {
         val merged = images + videos
         // dateAdded is when MediaStore indexed the file, not when the photo was actually taken -
         // for a library restored from a backup or synced in bulk, that can be nearly identical
-        // across thousands of photos even though they span years, which made "newest/oldest"
-        // look like it wasn't doing anything. dateTaken reflects the real capture time and is
-        // what "newest/oldest" should actually mean; fall back to dateAdded only when a photo
-        // has no dateTaken at all.
-        fun effectiveDate(p: Photo) = if (p.dateTaken > 0) p.dateTaken else p.dateAdded
+        // across thousands of photos even though they span years. dateTaken reflects the real
+        // capture time and is what "newest/oldest" should mean, but it's frequently entirely
+        // absent for screenshots, downloads, and received media with no EXIF - falling back
+        // straight to dateAdded in that case reproduces the same clustering problem. dateModified
+        // (file write time) is populated far more reliably and is a meaningfully better fallback
+        // than dateAdded for those cases, though still not a substitute for real capture time.
+        fun effectiveDate(p: Photo) = when {
+            p.dateTaken > 0 -> p.dateTaken
+            p.dateModified > 0 -> p.dateModified
+            else -> p.dateAdded
+        }
         return if (newestFirst) merged.sortedByDescending(::effectiveDate) else merged.sortedBy(::effectiveDate)
     }
 
@@ -95,6 +103,7 @@ class PhotoRepository(private val context: Context) {
         val nameCol = MediaStore.MediaColumns.DISPLAY_NAME
         val dateAddedCol = MediaStore.MediaColumns.DATE_ADDED
         val dateTakenCol = MediaStore.MediaColumns.DATE_TAKEN
+        val dateModifiedCol = MediaStore.MediaColumns.DATE_MODIFIED
         val sizeCol = MediaStore.MediaColumns.SIZE
         val bucketCol = MediaStore.MediaColumns.BUCKET_DISPLAY_NAME
         val widthCol = MediaStore.MediaColumns.WIDTH
@@ -121,6 +130,7 @@ class PhotoRepository(private val context: Context) {
                 val nameIdx = cursor.getColumnIndexOrThrow(nameCol)
                 val dateIdx = cursor.getColumnIndexOrThrow(dateAddedCol)
                 val dateTakenIdx = cursor.getColumnIndexOrThrow(dateTakenCol)
+                val dateModifiedIdx = cursor.getColumnIndexOrThrow(dateModifiedCol)
                 val sizeIdx = cursor.getColumnIndexOrThrow(sizeCol)
                 val bucketIdx = cursor.getColumnIndexOrThrow(bucketCol)
                 val widthIdx = cursor.getColumnIndexOrThrow(widthCol)
@@ -142,6 +152,9 @@ class PhotoRepository(private val context: Context) {
                             displayName = cursor.getString(nameIdx) ?: "",
                             dateAdded = cursor.getLong(dateIdx) * 1000L,
                             dateTaken = cursor.getLong(dateTakenIdx),
+                            // DATE_MODIFIED follows the same seconds-since-epoch convention as
+                            // DATE_ADDED (unlike DATE_TAKEN, which MediaStore stores in ms).
+                            dateModified = cursor.getLong(dateModifiedIdx) * 1000L,
                             size = cursor.getLong(sizeIdx),
                             bucketName = cursor.getString(bucketIdx),
                             width = cursor.getInt(widthIdx),

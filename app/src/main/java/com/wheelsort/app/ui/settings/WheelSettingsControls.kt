@@ -206,4 +206,28 @@ internal fun LazyListScope.wheelSettingsSliderItems(
             }
         )
     }
+    item {
+        SettingSlider(
+            label = "Back-gesture reserved area (edges)",
+            value = settings.edgeMarginDp,
+            valueRange = 0f..64f,
+            valueLabel = { "${it.roundToInt()} dp" },
+            interactionSource = interactionSource,
+            onChange = { v -> onUpdate { it.copy(edgeMarginDp = v) } }
+        )
+    }
+    item { SectionHeader("Video") }
+    item {
+        androidx.compose.foundation.layout.Row(
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)
+        ) {
+            Text("Autoplay videos in the wheel", style = MaterialTheme.typography.bodyLarge)
+            androidx.compose.material3.Switch(
+                checked = settings.autoplayVideos,
+                onCheckedChange = { v -> onUpdate { it.copy(autoplayVideos = v) } }
+            )
+        }
+    }
 }

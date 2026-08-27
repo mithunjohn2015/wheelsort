@@ -14,6 +14,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -79,7 +80,6 @@ private enum class SortPhase { LOADING, COMPLETE, WHEEL }
 fun SortScreen(
     albumFilter: String?,
     newestFirst: Boolean = true,
-    screenshotsFirst: Boolean = false,
     onExit: () -> Unit,
     onOpenTrash: () -> Unit,
     viewModel: SortViewModel = viewModel(),
@@ -124,8 +124,8 @@ fun SortScreen(
         if (viewModel.uiState.value.pendingDeleteCount > 0) performFlush(then = onOpenTrash) else onOpenTrash()
     }
 
-    LaunchedEffect(albumFilter, newestFirst, screenshotsFirst) {
-        viewModel.loadPhotos(albumFilter, newestFirst, screenshotsFirst)
+    LaunchedEffect(albumFilter, newestFirst) {
+        viewModel.loadPhotos(albumFilter, newestFirst)
     }
 
     Scaffold(
@@ -490,6 +490,17 @@ private fun WheelCarousel(
                                 // losing to scroll instead of just changing where the detector lives.
                                 awaitEachGesture {
                                     val down = awaitFirstDown(pass = PointerEventPass.Initial)
+
+                                    // Leave a margin at the screen edges for the system's own
+                                    // back-navigation swipe - without this, this detector claims
+                                    // that same touch area first (it runs on the Initial pass
+                                    // specifically to win against the list's own scroll), which
+                                    // was also winning against the OS gesture, not just the scroll.
+                                    val edgeMarginPx = with(density) { latestSettings.value.edgeMarginDp.dp.toPx() }
+                                    if (down.position.x < edgeMarginPx || down.position.x > size.width - edgeMarginPx) {
+                                        return@awaitEachGesture
+                                    }
+
                                     velocityTracker.resetTracking()
                                     velocityTracker.addPointerInputChange(down)
                                     val pointerId = down.id
@@ -569,20 +580,27 @@ private fun WheelCarousel(
                                             // transparent-card bug earlier in this project. This fakes
                                             // a similar "turning edge-on and flipping away" look safely
                                             // by squeezing scaleX toward zero instead of tilting in 3D.
-                                            val angleDeg = (signedDistance * 55f).coerceIn(-80f, 80f)
+                                            // Deliberately NOT combined with the general shrink-per-
+                                            // level `scale` - multiplying the two together diluted the
+                                            // squeeze into looking like plain shrinking with a slight
+                                            // tilt, rather than reading as an actual flip. Pushed to
+                                            // near-90 degrees so peek cards visibly turn edge-on rather
+                                            // than just leaning.
+                                            val angleDeg = (signedDistance * 85f).coerceIn(-89f, 89f)
                                             val angleRad = angleDeg * (kotlin.math.PI.toFloat() / 180f)
-                                            val flipScaleX = cos(angleRad).coerceAtLeast(0.08f)
-                                            scaleX = flipScaleX * scale
-                                            scaleY = scale
-                                            rotationZ = (signedDistance * 6f).coerceIn(-18f, 18f)
+                                            scaleX = cos(angleRad).coerceAtLeast(0.02f)
+                                            scaleY = 1f
                                             translationY = signedDistance * itemSpacingPx * 0.6f
                                         }
                                         com.wheelsort.app.data.WheelTransitionStyle.SLIDE -> {
-                                            // No shrink, no extra offset beyond natural list flow -
-                                            // a plain flat slide, depth conveyed only by the dim scrim.
-                                            scaleX = 1f
-                                            scaleY = 1f
-                                            translationY = 0f
+                                            // Distinct from STACK's aggressive shrink+peek - a light,
+                                            // gentle depth cue instead (fixed shrink, not tied to the
+                                            // user's Depth setting), while still respecting the user's
+                                            // spacing setting so it isn't identical to an unstyled list.
+                                            val slideScale = (1f - distance * 0.05f).coerceAtLeast(0.75f)
+                                            scaleX = slideScale
+                                            scaleY = slideScale
+                                            translationY = signedDistance * itemSpacingPx
                                         }
                                     }
 
@@ -597,7 +615,9 @@ private fun WheelCarousel(
                                 modifier = Modifier.fillMaxSize(),
                                 glowColor = if (isCentered && dragProgress > 0.02f) dragDirectionColor else null,
                                 glowStrength = if (isCentered) dragProgress else 0f,
-                                dimProvider = { levelDim(centerDistance(listState, index), settings.dimPerLevel, settings.maxDim) }
+                                dimProvider = { levelDim(centerDistance(listState, index), settings.dimPerLevel, settings.maxDim) },
+                                isCentered = isCentered,
+                                autoplay = settings.autoplayVideos
                             )
                         }
                     }
@@ -697,6 +717,41 @@ private fun TrashBinButton(pendingCount: Int, onClick: () -> Unit, modifier: Mod
 }
 
 /**
+ * Plays a video inline using android.widget.VideoView (wrapped for Compose via AndroidView) -
+ * the built-in Android video widget, chosen deliberately over adding an ExoPlayer dependency for
+ * what's a single, simple use case. Tapping the video pauses it back to the static thumbnail.
+ * [onEnded] fires when playback finishes naturally, so the caller can revert to the thumbnail too.
+ */
+@Composable
+private fun InlineVideoPlayer(
+    uri: android.net.Uri,
+    onTap: () -> Unit,
+    onEnded: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val currentOnEnded = rememberUpdatedState(onEnded)
+    Box(
+        modifier = modifier.clickable(
+            indication = null,
+            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+        ) { onTap() }
+    ) {
+        androidx.compose.ui.viewinterop.AndroidView(
+            factory = { context ->
+                android.widget.VideoView(context).apply {
+                    setVideoURI(uri)
+                    setOnPreparedListener { mp -> mp.start() }
+                    setOnCompletionListener { currentOnEnded.value() }
+                    setOnErrorListener { _, _, _ -> currentOnEnded.value(); true }
+                }
+            },
+            modifier = Modifier.fillMaxSize(),
+            onRelease = { view -> view.stopPlayback() }
+        )
+    }
+}
+
+/**
  * Every photo requests the exact same bounded size ([PHOTO_REQUEST_PX]), matching what the
  * preload pass above warms the cache with - a mismatched size here would silently defeat the
  * preload (different size = different cache entry = cache miss). The centered card gets an
@@ -706,6 +761,10 @@ private fun TrashBinButton(pendingCount: Int, onClick: () -> Unit, modifier: Mod
  * translucent card would let whatever's behind it show through. It's a lambda (read inside
  * graphicsLayer, at draw-time) rather than a plain Float so scrolling can update it every frame
  * without forcing this composable to recompose - matching how the scale transform above works.
+ *
+ * [isCentered] and [autoplay] together control inline video playback: only the centered card
+ * ever plays inline (never more than one video decoding at once), and autoplay starts it the
+ * moment it becomes centered rather than requiring a tap.
  */
 @Composable
 private fun PhotoCard(
@@ -713,10 +772,24 @@ private fun PhotoCard(
     modifier: Modifier = Modifier,
     glowColor: Color? = null,
     glowStrength: Float = 0f,
-    dimProvider: () -> Float = { 0f }
+    dimProvider: () -> Float = { 0f },
+    isCentered: Boolean = false,
+    autoplay: Boolean = false
 ) {
     val shadowColor = if (glowColor != null) glowColor.copy(alpha = 0.85f) else NEUTRAL_SHADOW
     val elevation = lerp(8.dp, 26.dp, glowStrength.coerceIn(0f, 1f))
+    var isPlaying by remember(photo.id) { mutableStateOf(false) }
+
+    // Only ever plays while this specific card is actually centered - scrolling away always
+    // stops it immediately, so at most one video is ever decoding/playing at a time regardless
+    // of how it was started (tap or autoplay).
+    LaunchedEffect(isCentered, photo.id) {
+        if (!isCentered) {
+            isPlaying = false
+        } else if (photo.isVideo && autoplay) {
+            isPlaying = true
+        }
+    }
 
     Card(
         modifier = modifier.shadow(
@@ -731,30 +804,47 @@ private fun PhotoCard(
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
     ) {
         Box {
-            CrossfadeThumbnail(
-                uri = photo.uri,
-                contentDescription = photo.displayName,
-                sizePx = PHOTO_REQUEST_PX,
-                modifier = Modifier.fillMaxSize()
-            )
+            if (photo.isVideo && isCentered && isPlaying) {
+                InlineVideoPlayer(
+                    uri = photo.uri,
+                    onTap = { isPlaying = false },
+                    onEnded = { isPlaying = false },
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                CrossfadeThumbnail(
+                    uri = photo.uri,
+                    contentDescription = photo.displayName,
+                    sizePx = PHOTO_REQUEST_PX,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
             Box(
                 Modifier
                     .fillMaxSize()
                     .graphicsLayer { alpha = dimProvider().coerceIn(0f, 1f) }
                     .background(Color.Black)
             )
-            if (photo.isVideo) {
+            if (photo.isVideo && !isPlaying) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Box(
                         modifier = Modifier
                             .size(52.dp)
                             .clip(CircleShape)
-                            .background(Color.Black.copy(alpha = 0.45f)),
+                            .background(Color.Black.copy(alpha = 0.45f))
+                            .then(
+                                if (isCentered) {
+                                    Modifier.clickable(
+                                        indication = null,
+                                        interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                                    ) { isPlaying = true }
+                                } else Modifier
+                            ),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             Icons.Filled.PlayArrow,
-                            contentDescription = null,
+                            contentDescription = "Play",
                             tint = Color.White,
                             modifier = Modifier.size(28.dp)
                         )

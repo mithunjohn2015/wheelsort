@@ -7,6 +7,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyGridState
@@ -36,6 +37,8 @@ import com.wheelsort.app.data.Photo
 import com.wheelsort.app.ui.sort.PhotoViewerOverlay
 import com.wheelsort.app.util.formatDuration
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 private const val MIN_COLUMNS = 2
@@ -132,17 +135,30 @@ fun GridScreen(
                             // drag-select is a separate detector below. Distinguished by pointer
                             // count, so the two coexist without the axis-conflict issues a single-
                             // finger gesture would have against the grid's own scroll.
-                            .pointerInput(Unit) {
-                                detectTransformGestures { _, _, zoom, _ ->
-                                    if (zoom > 1.05f) {
-                                        columnCount = (columnCount - 1).coerceAtLeast(MIN_COLUMNS)
-                                    } else if (zoom < 0.95f) {
-                                        columnCount = (columnCount + 1).coerceAtMost(MAX_COLUMNS)
-                                    }
-                                }
-                            }
                             .pointerInput(hasSelection, photos) {
+                                // Shared between the drag-select coroutine and the auto-scroll
+                                // coroutine below - auto-scroll needs to keep running even while
+                                // the finger holds still near an edge, which onDrag alone can't
+                                // do since it only fires on actual movement.
+                                var dragPosition: Offset? = null
+                                var isDragging = false
+
                                 coroutineScope {
+                                    // Pinch to resize the grid. Distinguished from the single-
+                                    // finger gestures below by pointer count, and now sharing this
+                                    // same pointerInput block rather than a separate one - two
+                                    // independent pointerInput nodes both trying to interpret the
+                                    // same touches was very likely why pinch wasn't registering
+                                    // reliably; a single node's coroutines cooperate correctly.
+                                    launch {
+                                        detectTransformGestures { _, _, zoom, _ ->
+                                            if (zoom > 1.05f) {
+                                                columnCount = (columnCount - 1).coerceAtLeast(MIN_COLUMNS)
+                                            } else if (zoom < 0.95f) {
+                                                columnCount = (columnCount + 1).coerceAtMost(MAX_COLUMNS)
+                                            }
+                                        }
+                                    }
                                     launch {
                                         detectTapGestures(onTap = { pos ->
                                             val index = indexAt(gridState, pos) ?: return@detectTapGestures
@@ -153,14 +169,62 @@ fun GridScreen(
                                     launch {
                                         detectDragGesturesAfterLongPress(
                                             onDragStart = { pos ->
+                                                isDragging = true
+                                                dragPosition = pos
                                                 val index = indexAt(gridState, pos) ?: return@detectDragGesturesAfterLongPress
                                                 photos.getOrNull(index)?.let { viewModel.ensureSelected(it.id) }
                                             },
-                                            onDrag = { change, _ ->
-                                                val index = indexAt(gridState, change.position) ?: return@detectDragGesturesAfterLongPress
-                                                photos.getOrNull(index)?.let { viewModel.ensureSelected(it.id) }
+                                            onDragEnd = { isDragging = false; dragPosition = null },
+                                            onDragCancel = { isDragging = false; dragPosition = null },
+                                            onDrag = { change, dragAmount ->
+                                                dragPosition = change.position
+                                                // Selecting only the exact endpoint misses items
+                                                // whenever a fast sweep jumps past several of them
+                                                // between two consecutive drag events - stepping
+                                                // along the path between the previous and current
+                                                // position catches everything the finger crossed,
+                                                // matching how a real "paint select" should feel.
+                                                val to = change.position
+                                                val from = to - dragAmount
+                                                val steps = 6
+                                                for (i in 0..steps) {
+                                                    val t = i / steps.toFloat()
+                                                    val point = Offset(
+                                                        from.x + (to.x - from.x) * t,
+                                                        from.y + (to.y - from.y) * t
+                                                    )
+                                                    val index = indexAt(gridState, point) ?: continue
+                                                    photos.getOrNull(index)?.let { viewModel.ensureSelected(it.id) }
+                                                }
                                             }
                                         )
+                                    }
+                                    // Continuously scrolls the grid while a drag-select is active
+                                    // and the finger sits near the top or bottom edge - runs on its
+                                    // own timer rather than piggybacking on drag events, so it keeps
+                                    // scrolling even if the finger holds still in the edge zone.
+                                    launch {
+                                        val edgeZonePx = 90f
+                                        val maxScrollPerTickPx = 22f
+                                        while (isActive) {
+                                            val pos = dragPosition
+                                            if (isDragging && pos != null) {
+                                                val height = size.height.toFloat()
+                                                val distanceFromTop = pos.y
+                                                val distanceFromBottom = height - pos.y
+                                                when {
+                                                    distanceFromTop < edgeZonePx -> {
+                                                        val strength = 1f - (distanceFromTop / edgeZonePx).coerceIn(0f, 1f)
+                                                        gridState.scrollBy(-maxScrollPerTickPx * strength)
+                                                    }
+                                                    distanceFromBottom < edgeZonePx -> {
+                                                        val strength = 1f - (distanceFromBottom / edgeZonePx).coerceIn(0f, 1f)
+                                                        gridState.scrollBy(maxScrollPerTickPx * strength)
+                                                    }
+                                                }
+                                            }
+                                            delay(16)
+                                        }
                                     }
                                 }
                             }

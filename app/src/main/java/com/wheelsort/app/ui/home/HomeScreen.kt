@@ -43,7 +43,7 @@ import kotlinx.coroutines.withContext
 
 @Composable
 fun HomeScreen(
-    onStartSorting: (albumFilter: String?, newestFirst: Boolean, screenshotsFirst: Boolean) -> Unit,
+    onStartSorting: (albumFilter: String?, newestFirst: Boolean) -> Unit,
     onOpenTrash: () -> Unit,
     onOpenStats: () -> Unit,
     onOpenOrganize: () -> Unit,
@@ -56,7 +56,6 @@ fun HomeScreen(
     var albums by remember { mutableStateOf<List<String>>(emptyList()) }
     var selectedAlbum by remember { mutableStateOf<String?>(null) }
     var newestFirst by remember { mutableStateOf(true) }
-    var screenshotsFirst by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         albums = withContext(Dispatchers.IO) { PhotoRepository(context).distinctAlbums() }
@@ -104,9 +103,6 @@ fun HomeScreen(
 
             Spacer(Modifier.height(28.dp))
             SortOrderTabs(newestFirst = newestFirst, onChange = { newestFirst = it })
-
-            Spacer(Modifier.height(12.dp))
-            ScreenshotsFirstToggle(checked = screenshotsFirst, onChange = { screenshotsFirst = it })
 
             Spacer(Modifier.height(16.dp))
             Text(
@@ -180,7 +176,7 @@ fun HomeScreen(
                     Text(stringResource(R.string.home_grid))
                 }
                 Button(
-                    onClick = { onStartSorting(selectedAlbum, newestFirst, screenshotsFirst) },
+                    onClick = { onStartSorting(selectedAlbum, newestFirst) },
                     shape = RoundedCornerShape(16.dp),
                     modifier = Modifier.weight(1f).height(56.dp)
                 ) {
@@ -192,26 +188,6 @@ fun HomeScreen(
             Spacer(Modifier.height(20.dp))
             }
         }
-    }
-}
-
-@Composable
-private fun ScreenshotsFirstToggle(checked: Boolean, onChange: (Boolean) -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .clickable { onChange(!checked) }
-            .padding(vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            stringResource(R.string.home_screenshots_first),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(1f)
-        )
-        Switch(checked = checked, onCheckedChange = onChange)
     }
 }
 

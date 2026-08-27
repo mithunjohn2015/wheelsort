@@ -94,14 +94,11 @@ class SortViewModel(application: Application) : AndroidViewModel(application) {
         warmDispatcher.close()
     }
 
-    fun loadPhotos(albumFilter: String?, newestFirst: Boolean = true, screenshotsFirst: Boolean = false) {
+    fun loadPhotos(albumFilter: String?, newestFirst: Boolean = true) {
         _uiState.value = _uiState.value.copy(isLoading = true)
         warmJob?.cancel()
         viewModelScope.launch(Dispatchers.IO) {
-            var photos = repository.queryActivePhotos(albumFilter, newestFirst)
-            if (screenshotsFirst) {
-                photos = photos.sortedByDescending { com.wheelsort.app.util.isLikelyScreenshot(it) }
-            }
+            val photos = repository.queryActivePhotos(albumFilter, newestFirst)
             _uiState.value = SortUiState(
                 photos = photos,
                 isLoading = false,

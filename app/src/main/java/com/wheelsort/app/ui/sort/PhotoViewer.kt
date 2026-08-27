@@ -179,23 +179,16 @@ fun PhotoViewerOverlay(
                             )
                         }
                         try {
-                            val chooser = Intent.createChooser(editIntent, "Edit with")
-                            // createChooser's own grant flags don't reliably reach every app
-                            // shown in the picker on all Android versions - explicitly granting
-                            // to each resolved candidate is the documented fix for that gap, and
-                            // without it some editors would get a SecurityException on save that
-                            // was propagating uncaught and crashing this app, not just failing
-                            // silently in the editor.
-                            val resolved = context.packageManager.queryIntentActivities(editIntent, 0)
-                            for (info in resolved) {
-                                val packageName = info.activityInfo?.packageName ?: continue
-                                context.grantUriPermission(
-                                    packageName,
-                                    photo.uri,
-                                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                                )
-                            }
-                            context.startActivity(chooser)
+                            // FLAG_GRANT_READ/WRITE_URI_PERMISSION on the intent itself is the
+                            // correct, standard mechanism here - the system applies it to whichever
+                            // app is actually resolved to handle the intent. A separate manual
+                            // grantUriPermission() call was tried here previously to work around a
+                            // suspected chooser propagation gap, but regular apps generally can't
+                            // grant permissions on MediaStore content they don't own, so that call
+                            // was very likely throwing SecurityException on every attempt - which
+                            // this same broad catch below was reporting as "couldn't open editor"
+                            // even when a perfectly good editor was installed.
+                            context.startActivity(Intent.createChooser(editIntent, "Edit with"))
                         } catch (_: ActivityNotFoundException) {
                             // no editor installed - nothing sensible to fall back to
                             android.widget.Toast.makeText(context, "No photo editor found", android.widget.Toast.LENGTH_SHORT).show()

@@ -41,7 +41,12 @@ data class WheelSettings(
     /** Fraction of card width you must drag before a keep/delete swipe commits - lower = easier. */
     val swipeCommitDistanceFraction: Float = 0.34f,
     /** A flick faster than this (px/sec) commits a keep/delete swipe even with little travel. */
-    val swipeCommitVelocity: Float = 1500f
+    val swipeCommitVelocity: Float = 1500f,
+    /** Touches starting within this many dp of the left/right screen edge are left alone for
+     *  the system's own back-navigation gesture, instead of being claimed as a keep/delete swipe. */
+    val edgeMarginDp: Float = 24f,
+    /** If true, a video starts playing inline the moment it becomes the centered card, no tap needed. */
+    val autoplayVideos: Boolean = false
 ) {
     companion object {
         val DEFAULT = WheelSettings()
@@ -68,7 +73,9 @@ class WheelSettingsRepository(context: Context) {
         snapStiffness = prefs.getFloat(KEY_SNAP_STIFFNESS, WheelSettings.DEFAULT.snapStiffness),
         snapDamping = prefs.getFloat(KEY_SNAP_DAMPING, WheelSettings.DEFAULT.snapDamping),
         swipeCommitDistanceFraction = prefs.getFloat(KEY_COMMIT_DIST, WheelSettings.DEFAULT.swipeCommitDistanceFraction),
-        swipeCommitVelocity = prefs.getFloat(KEY_COMMIT_VEL, WheelSettings.DEFAULT.swipeCommitVelocity)
+        swipeCommitVelocity = prefs.getFloat(KEY_COMMIT_VEL, WheelSettings.DEFAULT.swipeCommitVelocity),
+        edgeMarginDp = prefs.getFloat(KEY_EDGE_MARGIN, WheelSettings.DEFAULT.edgeMarginDp),
+        autoplayVideos = prefs.getBoolean(KEY_AUTOPLAY, WheelSettings.DEFAULT.autoplayVideos)
     )
 
     fun save(settings: WheelSettings) {
@@ -84,6 +91,8 @@ class WheelSettingsRepository(context: Context) {
             .putFloat(KEY_SNAP_DAMPING, settings.snapDamping)
             .putFloat(KEY_COMMIT_DIST, settings.swipeCommitDistanceFraction)
             .putFloat(KEY_COMMIT_VEL, settings.swipeCommitVelocity)
+            .putFloat(KEY_EDGE_MARGIN, settings.edgeMarginDp)
+            .putBoolean(KEY_AUTOPLAY, settings.autoplayVideos)
             .apply()
     }
 
@@ -103,5 +112,7 @@ class WheelSettingsRepository(context: Context) {
         const val KEY_SNAP_DAMPING = "snap_damping"
         const val KEY_COMMIT_DIST = "commit_dist"
         const val KEY_COMMIT_VEL = "commit_vel"
+        const val KEY_EDGE_MARGIN = "edge_margin"
+        const val KEY_AUTOPLAY = "autoplay_videos"
     }
 }

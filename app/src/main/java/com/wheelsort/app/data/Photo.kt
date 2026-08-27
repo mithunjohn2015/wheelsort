@@ -16,6 +16,9 @@ data class Photo(
     val displayName: String,
     val dateAdded: Long,
     val dateTaken: Long,
+    /** File modification time (ms) - a third sort fallback for libraries where dateTaken is
+     *  missing entirely (common for screenshots, downloads, and received media with no EXIF). */
+    val dateModified: Long,
     val size: Long,
     val bucketName: String?,
     val width: Int,

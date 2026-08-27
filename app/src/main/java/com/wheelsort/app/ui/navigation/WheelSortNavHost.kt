@@ -25,7 +25,7 @@ import java.net.URLEncoder
 
 private object Routes {
     const val HOME = "home"
-    const val SORT = "sort?album={album}&newestFirst={newestFirst}&screenshotsFirst={screenshotsFirst}"
+    const val SORT = "sort?album={album}&newestFirst={newestFirst}"
     const val TRASH = "trash"
     const val STATS = "stats"
     const val ORGANIZE = "organize"
@@ -34,9 +34,9 @@ private object Routes {
     const val DUPLICATES = "duplicates"
     const val SETTINGS = "settings"
 
-    fun sort(album: String?, newestFirst: Boolean, screenshotsFirst: Boolean): String {
+    fun sort(album: String?, newestFirst: Boolean): String {
         val encoded = URLEncoder.encode(album ?: "", "UTF-8")
-        return "sort?album=$encoded&newestFirst=$newestFirst&screenshotsFirst=$screenshotsFirst"
+        return "sort?album=$encoded&newestFirst=$newestFirst"
     }
 
     fun grid(album: String?): String {
@@ -69,8 +69,8 @@ fun WheelSortNavHost() {
     ) {
         composable(Routes.HOME) {
             HomeScreen(
-                onStartSorting = { album, newestFirst, screenshotsFirst ->
-                    navController.navigate(Routes.sort(album, newestFirst, screenshotsFirst))
+                onStartSorting = { album, newestFirst ->
+                    navController.navigate(Routes.sort(album, newestFirst))
                 },
                 onOpenTrash = { navController.navigate(Routes.TRASH) },
                 onOpenStats = { navController.navigate(Routes.STATS) },
@@ -85,18 +85,15 @@ fun WheelSortNavHost() {
             route = Routes.SORT,
             arguments = listOf(
                 navArgument("album") { type = NavType.StringType; defaultValue = "" },
-                navArgument("newestFirst") { type = NavType.BoolType; defaultValue = true },
-                navArgument("screenshotsFirst") { type = NavType.BoolType; defaultValue = false }
+                navArgument("newestFirst") { type = NavType.BoolType; defaultValue = true }
             )
         ) { backStackEntry ->
             val raw = backStackEntry.arguments?.getString("album").orEmpty()
             val album = if (raw.isBlank()) null else URLDecoder.decode(raw, "UTF-8")
             val newestFirst = backStackEntry.arguments?.getBoolean("newestFirst") ?: true
-            val screenshotsFirst = backStackEntry.arguments?.getBoolean("screenshotsFirst") ?: false
             SortScreen(
                 albumFilter = album,
                 newestFirst = newestFirst,
-                screenshotsFirst = screenshotsFirst,
                 onExit = { navController.popBackStack() },
                 onOpenTrash = { navController.navigate(Routes.TRASH) }
             )
