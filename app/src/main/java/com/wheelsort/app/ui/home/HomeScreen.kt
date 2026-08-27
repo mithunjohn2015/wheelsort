@@ -28,7 +28,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -245,14 +244,8 @@ private fun QuietAction(icon: androidx.compose.ui.graphics.vector.ImageVector, l
         Box(
             modifier = Modifier
                 .size(44.dp)
-                .shadow(
-                    elevation = 6.dp,
-                    shape = RoundedCornerShape(14.dp),
-                    ambientColor = accent.copy(alpha = 0.5f),
-                    spotColor = accent.copy(alpha = 0.5f)
-                )
                 .clip(RoundedCornerShape(14.dp))
-                .background(accent.copy(alpha = 0.16f)),
+                .background(accent.copy(alpha = 0.14f)),
             contentAlignment = Alignment.Center
         ) {
             Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(20.dp))

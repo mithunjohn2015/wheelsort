@@ -7,7 +7,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -135,19 +134,65 @@ fun GridScreen(
                         contentPadding = PaddingValues(3.dp),
                         modifier = Modifier
                             .fillMaxSize()
-                            // Pinch (two fingers) resizes the grid; single-finger tap/long-press/
-                            // drag-select is a separate detector below. Distinguished by pointer
-                            // count, so the two coexist without the axis-conflict issues a single-
-                            // finger gesture would have against the grid's own scroll.
-                            //
+                            // Pinch, isolated in its own dedicated pointerInput and hand-rolled on
+                            // the Initial pass rather than using detectTransformGestures (which
+                            // only ever examines the default Main pass). Main pass propagates
+                            // leaf-to-root, so the grid's own internal scroll handling - a child,
+                            // nested inside this same LazyVerticalGrid - gets first look at every
+                            // touch, including a two-finger pinch, before a Main-pass detector on
+                            // this node ever sees it. That's the same class of bug already solved
+                            // for the wheel's horizontal swipe against its list's scroll; pinch
+                            // needed the identical fix. Kept as its own separate pointerInput
+                            // (rather than merged with tap/drag-select below) to rule out any
+                            // possibility of interference between detectors as a variable, since
+                            // this is a repeat fix after prior attempts didn't resolve it.
+                            .pointerInput(Unit) {
+                                awaitEachGesture {
+                                    var wasPinching = false
+                                    var baselineDistance = 0f
+                                    var accumulatedZoom = 1f
+
+                                    while (true) {
+                                        val event = awaitPointerEvent(androidx.compose.ui.input.pointer.PointerEventPass.Initial)
+                                        val pressed = event.changes.filter { it.pressed }
+
+                                        if (pressed.size >= 2) {
+                                            val p1 = pressed[0]
+                                            val p2 = pressed[1]
+                                            val currentDistance = (p1.position - p2.position).getDistance()
+                                            if (!wasPinching) {
+                                                wasPinching = true
+                                                baselineDistance = currentDistance
+                                            } else if (baselineDistance > 1f) {
+                                                val zoom = currentDistance / baselineDistance
+                                                accumulatedZoom *= zoom
+                                                // Consume so the grid's own scroll handling doesn't
+                                                // also try to interpret this multi-pointer movement.
+                                                p1.consume()
+                                                p2.consume()
+                                                baselineDistance = currentDistance
+                                                if (accumulatedZoom > 1.25f) {
+                                                    columnCount = (columnCount - 1).coerceAtLeast(MIN_COLUMNS)
+                                                    accumulatedZoom = 1f
+                                                } else if (accumulatedZoom < 0.8f) {
+                                                    columnCount = (columnCount + 1).coerceAtMost(MAX_COLUMNS)
+                                                    accumulatedZoom = 1f
+                                                }
+                                            }
+                                        } else {
+                                            wasPinching = false
+                                        }
+
+                                        if (event.changes.none { it.pressed }) break
+                                    }
+                                }
+                            }
                             // Keyed on Unit deliberately - this block used to be keyed on
                             // hasSelection/photos/columnCount, but this SAME block is what changes
                             // hasSelection (selecting an item) and columnCount (pinching). Keying
                             // on values the handler itself mutates meant every successful pinch
                             // step or every first selection tore the whole detector down and
-                            // restarted it mid-gesture, cancelling whatever was in progress - a
-                            // pinch could get through at most one step, and a drag-select died the
-                            // instant the first item was selected, before any sweep could happen.
+                            // restarted it mid-gesture, cancelling whatever was in progress.
                             // rememberUpdatedState below provides fresh reads instead, so nothing
                             // needs a restart to stay current.
                             .pointerInput(Unit) {
@@ -156,33 +201,9 @@ fun GridScreen(
                                 // the finger holds still near an edge, which onDrag alone can't
                                 // do since it only fires on actual movement.
                                 var dragPosition: Offset? = null
-                                var dragStartIndex: Int? = null
                                 var isDragging = false
 
                                 coroutineScope {
-                                    // Pinch to resize the grid. Distinguished from the single-
-                                    // finger gestures below by pointer count, and sharing this
-                                    // same pointerInput block rather than a separate one - two
-                                    // independent pointerInput nodes both trying to interpret the
-                                    // same touches was unreliable; a single node's coroutines
-                                    // cooperate correctly.
-                                    launch {
-                                        // zoom here is a per-frame incremental ratio (close to 1.0,
-                                        // e.g. 1.01 for a 1% change since the last callback), not a
-                                        // cumulative total - accumulating across the gesture and
-                                        // resetting once a step triggers is the correct pattern.
-                                        var accumulatedZoom = 1f
-                                        detectTransformGestures { _, _, zoom, _ ->
-                                            accumulatedZoom *= zoom
-                                            if (accumulatedZoom > 1.25f) {
-                                                columnCount = (columnCount - 1).coerceAtLeast(MIN_COLUMNS)
-                                                accumulatedZoom = 1f
-                                            } else if (accumulatedZoom < 0.8f) {
-                                                columnCount = (columnCount + 1).coerceAtMost(MAX_COLUMNS)
-                                                accumulatedZoom = 1f
-                                            }
-                                        }
-                                    }
                                     launch {
                                         detectTapGestures(onTap = { pos ->
                                             val state = latestUiState.value
@@ -197,29 +218,32 @@ fun GridScreen(
                                                 isDragging = true
                                                 dragPosition = pos
                                                 val index = indexAt(gridState, pos) ?: return@detectDragGesturesAfterLongPress
-                                                dragStartIndex = index
                                                 latestUiState.value.photos.getOrNull(index)?.let { viewModel.ensureSelected(it.id) }
                                             },
-                                            onDragEnd = { isDragging = false; dragPosition = null; dragStartIndex = null },
-                                            onDragCancel = { isDragging = false; dragPosition = null; dragStartIndex = null },
-                                            onDrag = { change, _ ->
+                                            onDragEnd = { isDragging = false; dragPosition = null },
+                                            onDragCancel = { isDragging = false; dragPosition = null },
+                                            onDrag = { change, dragAmount ->
                                                 dragPosition = change.position
-                                                // Samsung Gallery selects every item in every ROW
-                                                // the drag has swept across, not just items the
-                                                // exact finger path crossed - bounded to the swept
-                                                // row range so this stays cheap on a large library.
+                                                // Selects individual items the finger actually
+                                                // sweeps over - not whole rows. Stepping along the
+                                                // path between the previous and current position
+                                                // (rather than only checking the exact endpoint)
+                                                // catches items a fast sweep would otherwise skip
+                                                // between two consecutive drag events, while still
+                                                // allowing precise selection of just 1-2 photos at
+                                                // a slower pace.
                                                 val photos = latestUiState.value.photos
-                                                val startIndex = dragStartIndex ?: return@detectDragGesturesAfterLongPress
-                                                val currentIndex = indexAt(gridState, change.position)
-                                                    ?: return@detectDragGesturesAfterLongPress
-                                                val startRow = startIndex / columnCount
-                                                val currentRow = currentIndex / columnCount
-                                                val minRow = minOf(startRow, currentRow)
-                                                val maxRow = maxOf(startRow, currentRow)
-                                                val fromIndex = (minRow * columnCount).coerceIn(0, photos.size - 1)
-                                                val toIndex = ((maxRow + 1) * columnCount - 1).coerceIn(0, photos.size - 1)
-                                                for (i in fromIndex..toIndex) {
-                                                    photos.getOrNull(i)?.let { viewModel.ensureSelected(it.id) }
+                                                val to = change.position
+                                                val from = to - dragAmount
+                                                val steps = 6
+                                                for (i in 0..steps) {
+                                                    val t = i / steps.toFloat()
+                                                    val point = Offset(
+                                                        from.x + (to.x - from.x) * t,
+                                                        from.y + (to.y - from.y) * t
+                                                    )
+                                                    val index = indexAt(gridState, point) ?: continue
+                                                    photos.getOrNull(index)?.let { viewModel.ensureSelected(it.id) }
                                                 }
                                             }
                                         )

@@ -406,11 +406,13 @@ private fun WheelCarousel(
 
     LaunchedEffect(centeredIndex) { onCenterIndexChanged(centeredIndex) }
 
-    // True while the centered card is actively playing a video inline. The wheel's swipe
-    // detector checks this and backs off entirely while it's true, so a video's own seek bar
-    // (and any other touch interaction on the player) works normally instead of the swipe
-    // detector claiming horizontal drags on it as keep/delete attempts.
-    var centeredVideoPlaying by remember { mutableStateOf(false) }
+    // Which photo (by id) is currently playing inline, if any. Identity-based rather than a bare
+    // boolean: every card's own effect calls this when it stops being centered, and a plain
+    // boolean guarded by "only if isCentered" doesn't work, because isCentered has ALREADY
+    // flipped false by the exact moment that stop-call fires - the guard would block the very
+    // call it needs to let through, leaving the flag stuck true forever. Checking photo identity
+    // instead means a card can only ever clear its own playback state, never someone else's.
+    var playingVideoId by remember { mutableStateOf<Long?>(null) }
 
     // Which way the user was actually browsing just before a keep/delete decision - so the
     // automatic advance afterward continues in that same direction (e.g. if you were flicking
@@ -607,7 +609,7 @@ private fun WheelCarousel(
                                     // completely rather than claiming horizontal drags on it as a
                                     // keep/delete swipe attempt, which is what was breaking the
                                     // seek bar (dragging it was being read as "swipe left/right").
-                                    if (centeredVideoPlaying) return@awaitEachGesture
+                                    if (playingVideoId != null) return@awaitEachGesture
 
                                     // Leave a margin at the screen edges for the system's own
                                     // back-navigation swipe - without this, this detector claims
@@ -754,8 +756,11 @@ private fun WheelCarousel(
                                 autoplay = settings.autoplayVideos,
                                 muted = settings.videoMuted,
                                 onToggleMuted = onToggleMuted,
-                                isPlaying = isCentered && centeredVideoPlaying,
-                                onPlayingChange = { playing -> if (isCentered) centeredVideoPlaying = playing }
+                                isPlaying = playingVideoId == photo.id,
+                                onPlayingChange = { playing ->
+                                    if (playing) playingVideoId = photo.id
+                                    else if (playingVideoId == photo.id) playingVideoId = null
+                                }
                             )
                         }
                     }

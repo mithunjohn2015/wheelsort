@@ -1,14 +1,9 @@
 package com.wheelsort.app
 
-import android.animation.Animator
-import android.animation.AnimatorListenerAdapter
-import android.animation.ObjectAnimator
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
-import android.view.View
-import android.view.animation.AccelerateInterpolator
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -35,37 +30,19 @@ class MainActivity : ComponentActivity() {
 
         // Without this, the system splash can hand off before Compose has produced its actual
         // first frame - especially likely on a genuinely cold start right after install, where
-        // class loading and the first composition pass take longer than usual. That gap is what
-        // showed as "splash flashes, then closes" - the splash was dismissed on schedule, but
-        // there was nothing real to show yet underneath it. Keeping the splash up until this
-        // activity confirms it's actually composed removes that gap entirely.
+        // class loading and the first composition pass take longer than usual.
+        //
+        // Deliberately NOT using a custom setOnExitAnimationListener here (ObjectAnimator, view
+        // references, etc.) - that was added proactively, not requested, and stacking a second
+        // hand-built animated transition on top of the system splash, immediately followed by
+        // this app's own AnimatedSplashScreen, meant two separate animated handoffs running back
+        // to back during the most fragile part of a cold start: initial process/class loading,
+        // before Compose has even produced a frame. Simplifying to the system's default exit
+        // (a plain fade) removes that extra complexity from exactly the place it's riskiest,
+        // without losing the feature actually asked for - the tile-based splash below, which is
+        // the one screen actually customized.
         var contentReady = false
         splashScreen.setKeepOnScreenCondition { !contentReady }
-
-        // A small custom exit: the icon punches up and fades as the splash hands off to the
-        // app content, instead of the system's default instant cut.
-        splashScreen.setOnExitAnimationListener { splashScreenView ->
-            val iconScaleX = ObjectAnimator.ofFloat(splashScreenView.iconView, View.SCALE_X, 1f, 1.15f, 0f)
-            val iconScaleY = ObjectAnimator.ofFloat(splashScreenView.iconView, View.SCALE_Y, 1f, 1.15f, 0f)
-            val viewFade = ObjectAnimator.ofFloat(splashScreenView.view, View.ALPHA, 1f, 0f)
-
-            listOf(iconScaleX, iconScaleY).forEach {
-                it.duration = 360
-                it.interpolator = AccelerateInterpolator()
-            }
-            viewFade.duration = 260
-            viewFade.startDelay = 140
-
-            iconScaleX.addListener(object : AnimatorListenerAdapter() {
-                override fun onAnimationEnd(animation: Animator) {
-                    splashScreenView.remove()
-                }
-            })
-
-            iconScaleX.start()
-            iconScaleY.start()
-            viewFade.start()
-        }
 
         setContent {
             WheelSortTheme {
