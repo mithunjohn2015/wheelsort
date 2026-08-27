@@ -173,10 +173,17 @@ fun PhotoViewerOverlay(
                     IconButton(onClick = {
                         val editIntent = Intent(Intent.ACTION_EDIT).apply {
                             setDataAndType(photo.uri, "image/*")
-                            addFlags(
-                                Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                            )
+                            // READ only, deliberately no FLAG_GRANT_WRITE_URI_PERMISSION - the
+                            // confirmed SecurityException is very likely the system refusing to
+                            // honor a write-permission grant on a MediaStore URI this app doesn't
+                            // itself have unrestricted write access to (most photos were created
+                            // by the camera app, not this one, and writing to media you don't own
+                            // normally requires going through the createWriteRequest() consent
+                            // flow, which a plain grant flag can't substitute for). Most photo
+                            // editors save an edit as a new file using their own write access
+                            // rather than overwriting the original in place, so this shouldn't
+                            // cost real functionality for the common case.
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                         }
                         // Deliberately no queryIntentActivities() pre-check here. Android's own
                         // package visibility docs are explicit: startActivity() does NOT require

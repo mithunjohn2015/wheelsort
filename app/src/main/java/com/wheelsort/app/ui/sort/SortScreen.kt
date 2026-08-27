@@ -611,12 +611,21 @@ private fun WheelCarousel(
                                 awaitEachGesture {
                                     val down = awaitFirstDown(pass = PointerEventPass.Initial)
 
-                                    // While a video is playing inline, its own seek bar and
-                                    // controls need every touch - this detector backs off
-                                    // completely rather than claiming horizontal drags on it as a
-                                    // keep/delete swipe attempt, which is what was breaking the
-                                    // seek bar (dragging it was being read as "swipe left/right").
-                                    if (actuallyPlayingVideoId != null) return@awaitEachGesture
+                                    // Only the bottom controls strip (seek bar, play/pause) defers
+                                    // to the player while a video is playing - backing off from the
+                                    // WHOLE card made swipe unusable for reviewing videos at all,
+                                    // which defeats the point of autoplay: you'd have to pause every
+                                    // single video before you could act on it. Swiping the main
+                                    // video image works exactly like swiping a photo, even mid-
+                                    // playback; only a touch that starts low enough to plausibly be
+                                    // reaching for the seek bar still lets the player handle it.
+                                    if (actuallyPlayingVideoId != null) {
+                                        val cardBottom = size.height / 2f + latestItemHeightPx.value / 2f
+                                        val controlsZoneTop = cardBottom - with(density) { 72.dp.toPx() }
+                                        if (down.position.y in controlsZoneTop..cardBottom) {
+                                            return@awaitEachGesture
+                                        }
+                                    }
 
                                     // Leave a margin at the screen edges for the system's own
                                     // back-navigation swipe - without this, this detector claims

@@ -204,6 +204,7 @@ fun GridScreen(
                                 // the finger holds still near an edge, which onDrag alone can't
                                 // do since it only fires on actual movement.
                                 var dragPosition: Offset? = null
+                                var dragStartIndex: Int? = null
                                 var isDragging = false
 
                                 coroutineScope {
@@ -221,21 +222,52 @@ fun GridScreen(
                                                 isDragging = true
                                                 dragPosition = pos
                                                 val index = indexAt(gridState, pos) ?: return@detectDragGesturesAfterLongPress
+                                                dragStartIndex = index
                                                 latestUiState.value.photos.getOrNull(index)?.let { viewModel.ensureSelected(it.id) }
                                             },
-                                            onDragEnd = { isDragging = false; dragPosition = null },
-                                            onDragCancel = { isDragging = false; dragPosition = null },
+                                            onDragEnd = { isDragging = false; dragPosition = null; dragStartIndex = null },
+                                            onDragCancel = { isDragging = false; dragPosition = null; dragStartIndex = null },
                                             onDrag = { change, dragAmount ->
                                                 dragPosition = change.position
-                                                // Selects individual items the finger actually
-                                                // sweeps over - not whole rows. Stepping along the
-                                                // path between the previous and current position
-                                                // (rather than only checking the exact endpoint)
-                                                // catches items a fast sweep would otherwise skip
-                                                // between two consecutive drag events, while still
-                                                // allowing precise selection of just 1-2 photos at
-                                                // a slower pace.
                                                 val photos = latestUiState.value.photos
+                                                val startIndex = dragStartIndex ?: return@detectDragGesturesAfterLongPress
+                                                val currentIndex = indexAt(gridState, change.position)
+                                                    ?: return@detectDragGesturesAfterLongPress
+                                                val startRow = startIndex / columnCount
+                                                val currentRow = currentIndex / columnCount
+
+                                                // Any row the finger has moved completely past (not
+                                                // the one it's in right now) gets every item selected -
+                                                // reaching a different row necessarily means the finger
+                                                // swept across the full width of every row strictly
+                                                // between where the drag began and where it is now.
+                                                // Matches Samsung Gallery: fast sweeps select whole rows
+                                                // as you cross them, without needing to trace every item.
+                                                if (currentRow != startRow) {
+                                                    val (fullyPassedFrom, fullyPassedTo) = if (currentRow > startRow) {
+                                                        startRow to (currentRow - 1)
+                                                    } else {
+                                                        (currentRow + 1) to startRow
+                                                    }
+                                                    val fromIdx = (fullyPassedFrom * columnCount).coerceIn(0, photos.size - 1)
+                                                    val toIdx = ((fullyPassedTo + 1) * columnCount - 1).coerceIn(0, photos.size - 1)
+                                                    if (fromIdx <= toIdx) {
+                                                        for (i in fromIdx..toIdx) {
+                                                            photos.getOrNull(i)?.let { viewModel.ensureSelected(it.id) }
+                                                        }
+                                                    }
+                                                }
+
+                                                // The row the finger is currently in gets precise,
+                                                // path-based selection instead - only the specific
+                                                // items actually swept over, not the whole row the
+                                                // instant the finger enters it. This is what still lets
+                                                // you pick just 1-2 photos precisely within a row,
+                                                // rather than every row snapping to fully-selected.
+                                                // Stepping along the path between the previous and
+                                                // current position (not just the exact endpoint) catches
+                                                // items a fast sweep would otherwise skip between two
+                                                // consecutive drag events.
                                                 val to = change.position
                                                 val from = to - dragAmount
                                                 val steps = 6

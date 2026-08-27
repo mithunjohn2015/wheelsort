@@ -29,6 +29,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
+import com.wheelsort.app.data.DuplicateGroup
+import com.wheelsort.app.data.DuplicateUiState
 import com.wheelsort.app.ui.theme.ActionKeep
 import com.wheelsort.app.util.formatBytes
 
@@ -136,6 +138,13 @@ private fun ResultsState(uiState: DuplicateUiState, onToggle: (Long) -> Unit, on
         val selectedBytes = uiState.groups.flatMap { it.photos }
             .filter { it.id in uiState.selectedForDeletion }
             .sumOf { it.size }
+
+        Text(
+            "${uiState.duplicateCount} duplicate photo${if (uiState.duplicateCount == 1) "" else "s"} found in ${uiState.groups.size} group${if (uiState.groups.size == 1) "" else "s"}",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp)
+        )
 
         LazyColumn(modifier = Modifier.weight(1f)) {
             items(uiState.groups, key = { g -> g.photos.first().id }) { group ->
