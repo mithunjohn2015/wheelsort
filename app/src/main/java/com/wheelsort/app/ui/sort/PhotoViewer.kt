@@ -178,28 +178,28 @@ fun PhotoViewerOverlay(
                                     Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                             )
                         }
-                        // Checking for candidates first, rather than only relying on the exception
-                        // from startActivity, distinguishes "no editor app actually supports this"
-                        // from "something else went wrong" - two attempted fixes without
-                        // confirmation means the next step is seeing what's actually happening
-                        // rather than guessing again.
-                        val candidates = context.packageManager.queryIntentActivities(editIntent, 0)
-                        if (candidates.isEmpty()) {
+                        // Deliberately no queryIntentActivities() pre-check here. Android's own
+                        // package visibility docs are explicit: startActivity() does NOT require
+                        // package visibility to launch another app's activity, but
+                        // queryIntentActivities() DOES require a <queries> declaration in the
+                        // manifest (which this app doesn't have) - without it, that pre-check
+                        // returns an empty list even when a perfectly good editor is installed,
+                        // which was the actual cause of "no compatible app found" despite one
+                        // being available: the check was failing, not the launch.
+                        try {
+                            context.startActivity(Intent.createChooser(editIntent, "Edit with"))
+                        } catch (_: ActivityNotFoundException) {
                             android.widget.Toast.makeText(
                                 context,
                                 "No installed app supports editing images",
                                 android.widget.Toast.LENGTH_SHORT
                             ).show()
-                        } else {
-                            try {
-                                context.startActivity(Intent.createChooser(editIntent, "Edit with"))
-                            } catch (e: Exception) {
-                                android.widget.Toast.makeText(
-                                    context,
-                                    "Couldn't open editor: ${e.javaClass.simpleName}",
-                                    android.widget.Toast.LENGTH_LONG
-                                ).show()
-                            }
+                        } catch (e: Exception) {
+                            android.widget.Toast.makeText(
+                                context,
+                                "Couldn't open editor: ${e.javaClass.simpleName}",
+                                android.widget.Toast.LENGTH_LONG
+                            ).show()
                         }
                     }) {
                         Icon(Icons.Filled.Edit, contentDescription = "Edit with\u2026", tint = Color.White)

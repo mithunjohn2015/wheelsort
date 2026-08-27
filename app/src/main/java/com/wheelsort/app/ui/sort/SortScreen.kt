@@ -414,6 +414,13 @@ private fun WheelCarousel(
     // instead means a card can only ever clear its own playback state, never someone else's.
     var playingVideoId by remember { mutableStateOf<Long?>(null) }
 
+    // Separate from playingVideoId ("has this video been started") - tracks whether a video is
+    // GENUINELY advancing playback right now, driven by ExoPlayer's own onIsPlayingChanged. The
+    // gesture detector below checks this one, not playingVideoId: pausing via the player's own
+    // on-screen controls should make swipe work again immediately without hiding the player back
+    // to a thumbnail, which conflating the two flags used to prevent.
+    var actuallyPlayingVideoId by remember { mutableStateOf<Long?>(null) }
+
     // Which way the user was actually browsing just before a keep/delete decision - so the
     // automatic advance afterward continues in that same direction (e.g. if you were flicking
     // down to bring photos in from above, the next one after a decision should also arrive from
@@ -609,7 +616,7 @@ private fun WheelCarousel(
                                     // completely rather than claiming horizontal drags on it as a
                                     // keep/delete swipe attempt, which is what was breaking the
                                     // seek bar (dragging it was being read as "swipe left/right").
-                                    if (playingVideoId != null) return@awaitEachGesture
+                                    if (actuallyPlayingVideoId != null) return@awaitEachGesture
 
                                     // Leave a margin at the screen edges for the system's own
                                     // back-navigation swipe - without this, this detector claims
@@ -760,6 +767,10 @@ private fun WheelCarousel(
                                 onPlayingChange = { playing ->
                                     if (playing) playingVideoId = photo.id
                                     else if (playingVideoId == photo.id) playingVideoId = null
+                                },
+                                onActuallyPlayingChanged = { playing ->
+                                    if (playing) actuallyPlayingVideoId = photo.id
+                                    else if (actuallyPlayingVideoId == photo.id) actuallyPlayingVideoId = null
                                 }
                             )
                         }
@@ -872,9 +883,11 @@ private fun TrashBinButton(pendingCount: Int, onClick: () -> Unit, modifier: Mod
 private fun InlineVideoPlayer(
     uri: android.net.Uri,
     muted: Boolean,
+    onActuallyPlayingChanged: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val currentOnActuallyPlayingChanged = rememberUpdatedState(onActuallyPlayingChanged)
 
     val exoPlayer = remember(uri) {
         androidx.media3.exoplayer.ExoPlayer.Builder(context).build().apply {
@@ -885,8 +898,27 @@ private fun InlineVideoPlayer(
         }
     }
 
+    // Without this, pausing via the player's own on-screen controls was entirely invisible to
+    // the rest of the app - nothing told the wheel's swipe detector that playback had actually
+    // stopped, so it kept backing off from every touch as if the video were still playing, on
+    // that specific card, until you scrolled all the way away and back. onIsPlayingChanged is
+    // ExoPlayer's own accurate signal for "is content actively advancing right now" - it accounts
+    // for user pause, buffering, and everything else, not just whether a player instance exists.
     DisposableEffect(exoPlayer) {
-        onDispose { exoPlayer.release() }
+        val listener = object : androidx.media3.common.Player.Listener {
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                currentOnActuallyPlayingChanged.value(isPlaying)
+            }
+        }
+        exoPlayer.addListener(listener)
+        onDispose {
+            exoPlayer.removeListener(listener)
+            exoPlayer.release()
+            // Explicit, rather than relying solely on onIsPlayingChanged firing reliably during
+            // teardown - this composable being disposed (scrolling away, etc.) should always
+            // clear the flag regardless of what the listener does on the way out.
+            currentOnActuallyPlayingChanged.value(false)
+        }
     }
 
     LaunchedEffect(muted) {
@@ -917,11 +949,14 @@ private fun InlineVideoPlayer(
  *
  * [isCentered] and [autoplay] together control inline video playback: only the centered card
  * ever plays inline (never more than one video decoding at once), and autoplay starts it the
- * moment it becomes centered rather than requiring a tap. [isPlaying]/[onPlayingChange] are
- * controlled (not local state) because the wheel-level gesture detector needs to know whether a
- * video is currently playing, so it can back off entirely and let the video's own seek bar
- * handle touches - otherwise the wheel's swipe detector claims the seek bar's horizontal drags
- * as a keep/delete swipe attempt before the player ever sees them.
+ * moment it becomes centered rather than requiring a tap. [isPlaying]/[onPlayingChange] track
+ * whether a video has been STARTED (controls whether the player or the static thumbnail shows) -
+ * this is deliberately separate from [onActuallyPlayingChanged], which tracks whether the player
+ * is genuinely advancing playback right now (accounting for the user pausing via the player's
+ * own on-screen controls). Conflating the two was the actual bug behind "swipe stops working
+ * after pausing a video": pausing via the controller never touched Compose state at all, so the
+ * wheel's gesture detector (which needs to know when to stop backing off from touches) kept
+ * thinking playback was still active until the card was scrolled fully away and back.
  */
 @Composable
 private fun PhotoCard(
@@ -935,7 +970,8 @@ private fun PhotoCard(
     muted: Boolean = false,
     onToggleMuted: () -> Unit = {},
     isPlaying: Boolean = false,
-    onPlayingChange: (Boolean) -> Unit = {}
+    onPlayingChange: (Boolean) -> Unit = {},
+    onActuallyPlayingChanged: (Boolean) -> Unit = {}
 ) {
     val shadowColor = if (glowColor != null) glowColor.copy(alpha = 0.85f) else NEUTRAL_SHADOW
     val elevation = lerp(8.dp, 26.dp, glowStrength.coerceIn(0f, 1f))
@@ -946,6 +982,7 @@ private fun PhotoCard(
     LaunchedEffect(isCentered, photo.id) {
         if (!isCentered) {
             onPlayingChange(false)
+            onActuallyPlayingChanged(false)
         } else if (photo.isVideo && autoplay) {
             onPlayingChange(true)
         }
@@ -970,6 +1007,7 @@ private fun PhotoCard(
                 InlineVideoPlayer(
                     uri = photo.uri,
                     muted = muted,
+                    onActuallyPlayingChanged = onActuallyPlayingChanged,
                     modifier = Modifier.fillMaxSize()
                 )
             } else {

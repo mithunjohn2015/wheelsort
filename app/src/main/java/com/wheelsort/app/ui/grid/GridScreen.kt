@@ -3,6 +3,8 @@ package com.wheelsort.app.ui.grid
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -284,6 +286,18 @@ fun GridScreen(
                             Box(
                                 modifier = Modifier
                                     .padding(3.dp)
+                                    // animateItemPlacement (not the newer animateItem) deliberately -
+                                    // it's been available since Compose Foundation 1.2, well before
+                                    // this project's BOM, so it's guaranteed to compile even if it
+                                    // shows as deprecated; animateItem might not exist yet in this
+                                    // exact version, which would fail to compile entirely rather
+                                    // than just warn. Smoothly slides each tile to its new position
+                                    // instead of jump-cutting when the column count changes.
+                                    .animateItemPlacement(animationSpec = tween(280))
+                                    // Smoothly resizes each tile itself (not just its position) as
+                                    // pinching changes how many columns fit, so cells visibly grow
+                                    // or shrink to fit rather than snapping to their new size.
+                                    .animateContentSize(animationSpec = tween(280))
                                     .aspectRatio(1f)
                                     .clip(RoundedCornerShape(8.dp))
                             ) {

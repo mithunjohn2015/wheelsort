@@ -23,7 +23,12 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:label="@string/app_name"
         android:theme="@style/Theme.WheelSort"
-        android:supportsRtl="true">
+        android:supportsRtl="true"
+        android:usesCleartextTraffic="true">
+        <!-- The Immich backup check talks to a server URL the user provides themselves, often a
+             self-hosted instance on their own local network without TLS - blocking cleartext by
+             default (the platform default since Android 9) would silently break that feature for
+             a very common real-world setup, not a hypothetical one. -->
 
         <activity
             android:name=".MainActivity"
