@@ -64,7 +64,7 @@ data class SortUiState(
 /** Request size used for warming the cache - must exactly match PHOTO_REQUEST_PX in SortScreen.kt,
  *  or the warm pass caches a differently-sized bitmap than the wheel actually requests, which is
  *  a cache miss wearing a disguise. */
-private const val WARM_SIZE_PX = 1280
+private const val WARM_SIZE_PX = 1600
 
 /** How many photos ahead to eagerly warm - covers a very long browsing session for most libraries. */
 private const val WARM_CAP = 900
@@ -78,6 +78,7 @@ private const val REANCHOR_DISTANCE = 40
 class SortViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository = PhotoRepository(application)
+    private val reviewTracker = ReviewTracker(application)
     private val _uiState = MutableStateFlow(SortUiState())
     val uiState: StateFlow<SortUiState> = _uiState.asStateFlow()
 
@@ -182,6 +183,7 @@ class SortViewModel(application: Application) : AndroidViewModel(application) {
         val idx = s.photos.indexOfFirst { it.id == photo.id }
         if (idx == -1) return
 
+        reviewTracker.markReviewed(photo.id)
         val newPhotos = s.photos.toMutableList().also { it.removeAt(idx) }
         history.addLast(HistoryEntry(photo, SwipeAction.DELETE, flushed = false, removedAtIndex = idx))
         pendingQueue.addLast(photo)
@@ -204,6 +206,7 @@ class SortViewModel(application: Application) : AndroidViewModel(application) {
         val idx = s.photos.indexOfFirst { it.id == photo.id }
         if (idx == -1) return
 
+        reviewTracker.markReviewed(photo.id)
         history.addLast(HistoryEntry(photo, SwipeAction.KEEP))
         val nextIndex = (idx + 1).coerceAtMost(s.photos.size)
         _uiState.value = s.copy(

@@ -36,10 +36,19 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.wheelsort.app.R
 import com.wheelsort.app.data.PhotoRepository
+import com.wheelsort.app.data.ReviewTracker
 import com.wheelsort.app.ui.theme.AccentPrimary
 import com.wheelsort.app.ui.theme.ActionDelete
+import com.wheelsort.app.ui.theme.ActionKeep
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+
+/** [reviewed] only counts photos actually decided on (kept/deleted) - flicking through the wheel
+ *  without acting on a photo never counts toward this. */
+private data class AlbumSummary(val name: String, val total: Int, val reviewed: Int) {
+    val percent: Int get() = if (total == 0) 0 else (reviewed * 100 / total)
+    val isFullySorted: Boolean get() = total > 0 && reviewed >= total
+}
 
 @Composable
 fun HomeScreen(
@@ -53,11 +62,24 @@ fun HomeScreen(
     onOpenSettings: () -> Unit
 ) {
     val context = LocalContext.current
-    var albums by remember { mutableStateOf<List<String>>(emptyList()) }
+    var albums by remember { mutableStateOf<List<AlbumSummary>>(emptyList()) }
     var selectedAlbum by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
-        albums = withContext(Dispatchers.IO) { PhotoRepository(context).distinctAlbums() }
+        albums = withContext(Dispatchers.IO) {
+            val reviewedIds = ReviewTracker(context).reviewedIds()
+            // One query, grouped locally - avoids querying MediaStore once per album, which
+            // would scale badly with a library of any real size.
+            PhotoRepository(context).queryActivePhotos()
+                .filter { !it.bucketName.isNullOrBlank() }
+                .groupBy { it.bucketName!! }
+                .map { (name, photos) ->
+                    AlbumSummary(name, photos.size, photos.count { it.id in reviewedIds })
+                }
+                // Fully-sorted albums sink to the bottom - everything still needing attention
+                // stays up top where it's actually useful to see first.
+                .sortedWith(compareBy({ it.isFullySorted }, { it.name }))
+        }
     }
 
     Scaffold { padding ->
@@ -116,11 +138,15 @@ fun HomeScreen(
                         onClick = { selectedAlbum = null }
                     )
                 }
-                items(albums) { album ->
+                items(albums, key = { it.name }) { album ->
                     AlbumRow(
-                        name = album,
-                        selected = selectedAlbum == album,
-                        onClick = { selectedAlbum = album }
+                        name = album.name,
+                        selected = selectedAlbum == album.name,
+                        onClick = { selectedAlbum = album.name },
+                        total = album.total,
+                        reviewed = album.reviewed,
+                        percent = album.percent,
+                        isFullySorted = album.isFullySorted
                     )
                 }
             }
@@ -188,7 +214,15 @@ fun HomeScreen(
 }
 
 @Composable
-private fun AlbumRow(name: String, selected: Boolean, onClick: () -> Unit) {
+private fun AlbumRow(
+    name: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    total: Int? = null,
+    reviewed: Int = 0,
+    percent: Int = 0,
+    isFullySorted: Boolean = false
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -203,12 +237,42 @@ private fun AlbumRow(name: String, selected: Boolean, onClick: () -> Unit) {
             modifier = Modifier.size(20.dp)
         )
         Spacer(Modifier.width(14.dp))
-        Text(
-            name,
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.weight(1f)
-        )
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    name,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                if (isFullySorted) {
+                    Spacer(Modifier.width(6.dp))
+                    Icon(
+                        Icons.Filled.Check,
+                        contentDescription = "Fully sorted",
+                        tint = ActionKeep,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+            if (total != null && total > 0) {
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    "$reviewed of $total sorted \u2014 $percent%",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(4.dp))
+                LinearProgressIndicator(
+                    progress = { percent / 100f },
+                    modifier = Modifier
+                        .fillMaxWidth(0.6f)
+                        .height(3.dp)
+                        .clip(RoundedCornerShape(2.dp)),
+                    color = if (isFullySorted) ActionKeep else MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+        Spacer(Modifier.width(10.dp))
         AnimatedVisibility(
             visible = selected,
             enter = fadeIn() + scaleIn(initialScale = 0.6f),

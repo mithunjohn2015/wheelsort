@@ -31,8 +31,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.wheelsort.app.R
+import com.wheelsort.app.data.DuplicateScanManager
 import com.wheelsort.app.data.Photo
 import com.wheelsort.app.data.PhotoRepository
+import com.wheelsort.app.data.ReviewTracker
 import com.wheelsort.app.ui.sort.PhotoViewerOverlay
 import com.wheelsort.app.ui.theme.AccentPrimary
 import com.wheelsort.app.ui.theme.ActionDelete
@@ -52,6 +54,8 @@ fun StatsScreen(onExit: () -> Unit, onOpenAlbum: (String) -> Unit) {
     var activeCount by remember { mutableStateOf(0) }
     var trashedCount by remember { mutableStateOf(0) }
     var trashedBytes by remember { mutableStateOf(0L) }
+    var sortedPercent by remember { mutableStateOf(0) }
+    var duplicateAnalyzedPercent by remember { mutableStateOf(0) }
     var albumBreakdown by remember { mutableStateOf<List<Pair<String, Long>>>(emptyList()) }
     var largestPhotos by remember { mutableStateOf<List<Photo>>(emptyList()) }
     var viewerPhoto by remember { mutableStateOf<Photo?>(null) }
@@ -70,6 +74,15 @@ fun StatsScreen(onExit: () -> Unit, onOpenAlbum: (String) -> Unit) {
             activeCount = active.size
             trashedCount = trashed.size
             trashedBytes = trashed.sumOf { it.size }
+
+            val reviewedIds = ReviewTracker(context).reviewedIds()
+            sortedPercent = if (active.isEmpty()) 0 else
+                (active.count { it.id in reviewedIds } * 100 / active.size)
+
+            val analyzedIds = DuplicateScanManager.analyzedPhotoIds(context)
+            duplicateAnalyzedPercent = if (active.isEmpty()) 0 else
+                (active.count { it.id in analyzedIds } * 100 / active.size)
+
             albumBreakdown = active
                 .filter { !it.bucketName.isNullOrBlank() }
                 .groupBy { it.bucketName!! }
@@ -106,6 +119,10 @@ fun StatsScreen(onExit: () -> Unit, onOpenAlbum: (String) -> Unit) {
                 StatRow(Icons.Filled.Delete, ActionDelete, stringResource(R.string.stats_deleted), trashedCount.toString())
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
                 StatRow(Icons.Filled.Storage, Color(0xFFE0A72E), stringResource(R.string.stats_space), formatBytes(trashedBytes))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                StatRow(Icons.Filled.PhotoLibrary, Color(0xFF1FAE83), "Sorted", "$sortedPercent%")
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+                StatRow(Icons.Filled.PhotoLibrary, Color(0xFFD6579B), "Analyzed for duplicates", "$duplicateAnalyzedPercent%")
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
             }
 

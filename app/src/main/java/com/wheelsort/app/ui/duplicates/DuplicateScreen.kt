@@ -12,11 +12,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -24,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -31,8 +34,11 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.wheelsort.app.data.DuplicateGroup
 import com.wheelsort.app.data.DuplicateUiState
+import com.wheelsort.app.data.PhotoRepository
 import com.wheelsort.app.ui.theme.ActionKeep
 import com.wheelsort.app.util.formatBytes
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @Composable
 fun DuplicateScreen(
@@ -61,12 +67,24 @@ fun DuplicateScreen(
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             when {
-                uiState.isScanning -> ScanningState(uiState.scannedCount, uiState.totalCount)
-                !uiState.hasScanned -> IntroState(onScan = { viewModel.startScan() })
-                uiState.groups.isEmpty() -> EmptyResultState(onRescan = { viewModel.startScan() })
+                uiState.isScanning -> ScanningState(
+                    scanned = uiState.scannedCount,
+                    total = uiState.totalCount,
+                    scopeAlbum = uiState.scopeAlbum,
+                    onStop = { viewModel.stopScan() }
+                )
+                !uiState.hasScanned -> FolderPickerState(
+                    onScan = { album -> viewModel.startScan(album) },
+                    analyzedAlbums = viewModel.analyzedAlbums()
+                )
+                uiState.groups.isEmpty() -> EmptyResultState(
+                    wasStoppedEarly = uiState.wasStoppedEarly,
+                    onRescan = { viewModel.startScan(uiState.scopeAlbum) }
+                )
                 else -> ResultsState(
                     uiState = uiState,
                     onToggle = { viewModel.toggleSelection(it) },
+                    onContinueScan = { viewModel.startScan(uiState.scopeAlbum) },
                     onDelete = {
                         val intent = viewModel.buildDeleteIntent() ?: return@ResultsState
                         trashLauncher.launch(IntentSenderRequest.Builder(intent.intentSender).build())
@@ -78,73 +96,148 @@ fun DuplicateScreen(
 }
 
 @Composable
-private fun IntroState(onScan: () -> Unit) {
-    Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(
-                Icons.Filled.PhotoLibrary,
-                contentDescription = null,
-                modifier = Modifier.size(56.dp),
-                tint = MaterialTheme.colorScheme.primary
-            )
-            Spacer(Modifier.height(16.dp))
+private fun FolderPickerState(onScan: (String?) -> Unit, analyzedAlbums: Set<String>) {
+    val context = LocalContext.current
+    var albums by remember { mutableStateOf<List<String>>(emptyList()) }
+
+    LaunchedEffect(Unit) {
+        albums = withContext(Dispatchers.IO) { PhotoRepository(context).distinctAlbums() }
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp)) {
             Text(
                 "Scans your photos and groups ones that look alike \u2014 bursts, accidental copies, near-identical shots.",
-                textAlign = TextAlign.Center,
-                style = MaterialTheme.typography.bodyLarge
+                style = MaterialTheme.typography.bodyMedium
             )
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(4.dp))
             Text(
-                "This reads through every photo, so it can take a little while for large libraries.",
-                textAlign = TextAlign.Center,
-                style = MaterialTheme.typography.bodyMedium,
+                "Pick a folder to scan just that one, or scan everything at once.",
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Spacer(Modifier.height(24.dp))
-            Button(onClick = onScan) { Text("Scan for duplicates") }
+        }
+        LazyColumn(modifier = Modifier.weight(1f)) {
+            item {
+                FolderPickerRow(
+                    name = "All photos",
+                    analyzed = false,
+                    onClick = { onScan(null) }
+                )
+            }
+            items(albums, key = { it }) { album ->
+                FolderPickerRow(
+                    name = album,
+                    analyzed = album in analyzedAlbums,
+                    onClick = { onScan(album) }
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun ScanningState(scanned: Int, total: Int) {
+private fun FolderPickerRow(name: String, analyzed: Boolean, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 24.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            Icons.Filled.PhotoLibrary,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp)
+        )
+        Spacer(Modifier.width(14.dp))
+        Text(name, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+        if (analyzed) {
+            Icon(
+                Icons.Filled.Check,
+                contentDescription = "Already analyzed",
+                tint = ActionKeep,
+                modifier = Modifier.size(18.dp)
+            )
+        }
+    }
+    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+}
+
+@Composable
+private fun ScanningState(scanned: Int, total: Int, scopeAlbum: String?, onStop: () -> Unit) {
     Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+            Text(scopeAlbum ?: "All photos", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(16.dp))
             val progress = if (total > 0) scanned / total.toFloat() else 0f
             LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
             Spacer(Modifier.height(12.dp))
             Text("$scanned of $total photos scanned", style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.height(24.dp))
+            OutlinedButton(onClick = onStop) {
+                Icon(Icons.Filled.Stop, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Stop and review what's found so far")
+            }
         }
     }
 }
 
 @Composable
-private fun EmptyResultState(onRescan: () -> Unit) {
+private fun EmptyResultState(wasStoppedEarly: Boolean, onRescan: () -> Unit) {
     Box(Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(Icons.Filled.CheckCircle, contentDescription = null, tint = ActionKeep, modifier = Modifier.size(48.dp))
             Spacer(Modifier.height(12.dp))
-            Text("No duplicates found", style = MaterialTheme.typography.titleMedium)
+            Text(
+                if (wasStoppedEarly) "No duplicates found in what was scanned" else "No duplicates found",
+                style = MaterialTheme.typography.titleMedium,
+                textAlign = TextAlign.Center
+            )
             Spacer(Modifier.height(16.dp))
-            TextButton(onClick = onRescan) { Text("Scan again") }
+            if (wasStoppedEarly) {
+                Button(onClick = onRescan) { Text("Continue scanning") }
+            } else {
+                TextButton(onClick = onRescan) { Text("Scan again") }
+            }
         }
     }
 }
 
 @Composable
-private fun ResultsState(uiState: DuplicateUiState, onToggle: (Long) -> Unit, onDelete: () -> Unit) {
+private fun ResultsState(
+    uiState: DuplicateUiState,
+    onToggle: (Long) -> Unit,
+    onContinueScan: () -> Unit,
+    onDelete: () -> Unit
+) {
     Column(Modifier.fillMaxSize()) {
         val selectedCount = uiState.selectedForDeletion.size
         val selectedBytes = uiState.groups.flatMap { it.photos }
             .filter { it.id in uiState.selectedForDeletion }
             .sumOf { it.size }
 
-        Text(
-            "${uiState.duplicateCount} duplicate photo${if (uiState.duplicateCount == 1) "" else "s"} found in ${uiState.groups.size} group${if (uiState.groups.size == 1) "" else "s"}",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp)
-        )
+        Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp)) {
+            Text(
+                "${uiState.duplicateCount} duplicate photo${if (uiState.duplicateCount == 1) "" else "s"} found in ${uiState.groups.size} group${if (uiState.groups.size == 1) "" else "s"}",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (uiState.wasStoppedEarly) {
+                Spacer(Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "Stopped early \u2014 only part of this folder was scanned.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    TextButton(onClick = onContinueScan) { Text("Continue") }
+                }
+            }
+        }
 
         LazyColumn(modifier = Modifier.weight(1f)) {
             items(uiState.groups, key = { g -> g.photos.first().id }) { group ->

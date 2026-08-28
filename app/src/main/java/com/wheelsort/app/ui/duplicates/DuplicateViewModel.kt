@@ -17,9 +17,15 @@ class DuplicateViewModel(application: Application) : AndroidViewModel(applicatio
     // scan itself needs to keep running regardless, so it can't live here.
     val uiState: StateFlow<DuplicateUiState> = DuplicateScanManager.uiState
 
-    fun startScan() {
-        DuplicateScanManager.startScan(getApplication())
+    fun startScan(album: String? = null) {
+        DuplicateScanManager.startScan(getApplication(), album)
     }
+
+    fun stopScan() {
+        DuplicateScanManager.stopScan()
+    }
+
+    fun analyzedAlbums(): Set<String> = DuplicateScanManager.analyzedAlbums(getApplication())
 
     fun toggleSelection(photoId: Long) {
         DuplicateScanManager.toggleSelection(photoId)

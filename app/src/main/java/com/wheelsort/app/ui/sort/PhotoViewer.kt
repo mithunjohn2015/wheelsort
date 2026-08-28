@@ -10,6 +10,7 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -77,6 +78,12 @@ fun PhotoViewerOverlay(
     val dismissAmount = (-progress.value).coerceIn(0f, 0.3f) / 0.3f
     val scrimAlpha = 1f - dismissAmount * 0.55f
 
+    // Pinch-to-zoom state, reset whenever the photo changes.
+    var scale by remember(photo.id) { mutableFloatStateOf(1f) }
+    var offsetX by remember(photo.id) { mutableFloatStateOf(0f) }
+    var offsetY by remember(photo.id) { mutableFloatStateOf(0f) }
+    val isZoomed = scale > 1.01f
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -85,9 +92,29 @@ fun PhotoViewerOverlay(
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                // Pinch/pan, separate from the dismiss-drag detector below - there's no nested
+                // scrollable child here (unlike the wheel/grid) competing for gesture priority,
+                // so the default Main pass is fine, no Initial-pass workaround needed.
+                .pointerInput(photo.id) {
+                    detectTransformGestures { _, pan, zoom, _ ->
+                        val newScale = (scale * zoom).coerceIn(1f, 4f)
+                        scale = newScale
+                        if (newScale > 1.01f) {
+                            offsetX += pan.x
+                            offsetY += pan.y
+                        } else {
+                            offsetX = 0f
+                            offsetY = 0f
+                        }
+                    }
+                }
                 .pointerInput(Unit) {
                     detectVerticalDragGestures(
                         onDragEnd = {
+                            // While zoomed, a single-finger drag pans the image (handled above by
+                            // detectTransformGestures, which reports pan for any pointer count) -
+                            // it shouldn't also trigger the dismiss/details gesture.
+                            if (isZoomed) return@detectVerticalDragGestures
                             scope.launch {
                                 when {
                                     progress.value < -0.22f -> onClose()
@@ -97,6 +124,7 @@ fun PhotoViewerOverlay(
                             }
                         },
                         onVerticalDrag = { change, dragAmount ->
+                            if (isZoomed) return@detectVerticalDragGestures
                             change.consume()
                             scope.launch {
                                 progress.snapTo((progress.value - dragAmount / panelHeightPx).coerceIn(-0.3f, 1f))
@@ -106,16 +134,21 @@ fun PhotoViewerOverlay(
                 }
         ) {
             AsyncImage(
-                model = ImageRequest.Builder(context).data(photo.uri).crossfade(150).build(),
+                // Explicit large target size rather than relying on implicit constraint-based
+                // sizing - guarantees a genuinely high-resolution load for the full-screen view
+                // regardless of how Coil would otherwise resolve size from this layout's
+                // constraints. Still well within what loadThumbnail() can generate quickly.
+                model = ImageRequest.Builder(context).data(photo.uri).size(2400).crossfade(150).build(),
                 contentDescription = photo.displayName,
                 contentScale = ContentScale.Fit,
                 modifier = Modifier
                     .fillMaxSize()
                     .graphicsLayer {
                         val shrink = 1f - dismissAmount * 0.18f
-                        scaleX = shrink
-                        scaleY = shrink
-                        translationY = (-progress.value).coerceAtLeast(0f) * panelHeightPx * 0.5f
+                        scaleX = shrink * scale
+                        scaleY = shrink * scale
+                        translationX = offsetX
+                        translationY = (-progress.value).coerceAtLeast(0f) * panelHeightPx * 0.5f + offsetY
                     }
             )
 

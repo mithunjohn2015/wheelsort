@@ -315,7 +315,7 @@ private fun SessionCompleteState(reviewed: Int, freedBytes: Long, onBack: () -> 
 // what MediaStore's pre-generated thumbnail cache typically covers - going much higher risks
 // falling back to a slow full-resolution decode per photo, reintroducing the lag that switching
 // to loadThumbnail() was meant to fix in the first place.
-private const val PHOTO_REQUEST_PX = 1280
+private const val PHOTO_REQUEST_PX = 1600
 /** How many photos ahead/behind to keep warm in Coil's cache beyond what's on screen. */
 private const val PRELOAD_RADIUS = 6
 private val KEEP_COLOR = com.wheelsort.app.ui.theme.ActionKeep
@@ -452,6 +452,12 @@ private fun WheelCarousel(
 
     val density = LocalDensity.current
     val itemSpacingPx = with(density) { settings.itemSpacingDp.dp.toPx() }
+    // Flip and Slide need real breathing room between cards by default to read correctly - Stack
+    // is deliberately tight/overlapping at the 0dp default (that's the point of a "stack" look),
+    // but the same default left Flip and Slide looking cramped. This is added on top of the
+    // user's adjustable spacing setting, not a replacement for it - increasing that setting still
+    // pushes these two styles further apart too.
+    val flipSlideBaseSpacingPx = with(density) { 40.dp.toPx() }
     // Read fresh inside the gesture detector below (which is only ever launched once) so that
     // adjusting a setting live via the in-wheel overlay actually takes effect immediately,
     // instead of only applying once the pointerInput happened to restart.
@@ -731,7 +737,7 @@ private fun WheelCarousel(
                                             // discrete isCentered flag instead keeps "the middle one"
                                             // always flat, with only the peek cards above and below it
                                             // doing the actual flipping.
-                                            translationY = signedDistance * itemSpacingPx * 0.6f
+                                            translationY = signedDistance * (itemSpacingPx * 0.6f + flipSlideBaseSpacingPx)
                                             if (isCentered) {
                                                 scaleX = 1f
                                                 scaleY = 1f
@@ -749,7 +755,7 @@ private fun WheelCarousel(
                                             val slideScale = (1f - distance * 0.05f).coerceAtLeast(0.75f)
                                             scaleX = slideScale
                                             scaleY = slideScale
-                                            translationY = signedDistance * itemSpacingPx
+                                            translationY = signedDistance * (itemSpacingPx + flipSlideBaseSpacingPx)
                                         }
                                     }
 

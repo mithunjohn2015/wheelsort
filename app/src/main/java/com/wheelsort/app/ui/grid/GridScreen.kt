@@ -359,20 +359,28 @@ fun GridScreen(
                                         )
                                     }
                                 }
-                                if (hasSelection) {
+                                androidx.compose.animation.AnimatedVisibility(
+                                    visible = hasSelection,
+                                    enter = androidx.compose.animation.fadeIn() +
+                                        androidx.compose.animation.scaleIn(initialScale = 0.5f),
+                                    exit = androidx.compose.animation.fadeOut() +
+                                        androidx.compose.animation.scaleOut(targetScale = 0.5f),
+                                    modifier = Modifier.align(Alignment.TopStart).padding(6.dp)
+                                ) {
                                     // Circular checkbox, always visible once selection mode is
                                     // active (not just on selected items) - outlined and empty
                                     // when unselected, filled with a checkmark when selected.
+                                    // Background/border animate smoothly on toggle rather than
+                                    // snapping between states.
+                                    val fillColor by androidx.compose.animation.animateColorAsState(
+                                        if (isSelected) MaterialTheme.colorScheme.primary else Color.Black.copy(alpha = 0.32f),
+                                        label = "checkboxFill"
+                                    )
                                     Box(
                                         modifier = Modifier
-                                            .align(Alignment.TopStart)
-                                            .padding(6.dp)
                                             .size(22.dp)
                                             .clip(CircleShape)
-                                            .background(
-                                                if (isSelected) MaterialTheme.colorScheme.primary
-                                                else Color.Black.copy(alpha = 0.32f)
-                                            )
+                                            .background(fillColor)
                                             .then(
                                                 if (!isSelected) {
                                                     Modifier.border(1.5.dp, Color.White.copy(alpha = 0.85f), CircleShape)
@@ -380,7 +388,13 @@ fun GridScreen(
                                             ),
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        if (isSelected) {
+                                        androidx.compose.animation.AnimatedVisibility(
+                                            visible = isSelected,
+                                            enter = androidx.compose.animation.fadeIn() +
+                                                androidx.compose.animation.scaleIn(initialScale = 0.4f),
+                                            exit = androidx.compose.animation.fadeOut() +
+                                                androidx.compose.animation.scaleOut(targetScale = 0.4f)
+                                        ) {
                                             Icon(
                                                 Icons.Filled.Check,
                                                 contentDescription = null,
