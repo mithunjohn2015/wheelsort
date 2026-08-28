@@ -1,5 +1,6 @@
 package com.wheelsort.app.ui.backup
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -11,6 +12,9 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.CloudUpload
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -30,6 +34,7 @@ fun BackupScreen(
     viewModel: BackupViewModel = viewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    var showCloudflareSection by remember { mutableStateOf(uiState.cfAccessClientId.isNotBlank()) }
 
     Scaffold(
         topBar = {
@@ -50,6 +55,23 @@ fun BackupScreen(
                 .padding(horizontal = 20.dp)
         ) {
             Spacer(Modifier.height(8.dp))
+            Text(
+                "BACKUP DESTINATIONS",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(4.dp))
+            ComingSoonRow("Google Drive")
+            ComingSoonRow("OneDrive")
+            Spacer(Modifier.height(20.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+            Spacer(Modifier.height(20.dp))
+
+            Text(
+                "Immich",
+                style = MaterialTheme.typography.titleMedium
+            )
+            Spacer(Modifier.height(6.dp))
             Text(
                 "Checks which photos already exist on your own Immich server, using the same checksum comparison Immich's own apps use before uploading. Nothing is ever uploaded from here.",
                 style = MaterialTheme.typography.bodyMedium,
@@ -75,6 +97,51 @@ fun BackupScreen(
                 visualTransformation = PasswordVisualTransformation(),
                 modifier = Modifier.fillMaxWidth()
             )
+
+            Spacer(Modifier.height(12.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { showCloudflareSection = !showCloudflareSection }
+                    .padding(vertical = 6.dp)
+            ) {
+                Text(
+                    "Behind Cloudflare Access?",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(
+                    if (showCloudflareSection) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (showCloudflareSection) {
+                Text(
+                    "If your Immich server sits behind a Cloudflare Zero Trust Service Token, enter its Client ID and Secret here \u2014 sent as extra headers alongside your Immich API key on every request.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = uiState.cfAccessClientId,
+                    onValueChange = viewModel::updateCfAccessClientId,
+                    label = { Text("CF-Access-Client-Id") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = uiState.cfAccessClientSecret,
+                    onValueChange = viewModel::updateCfAccessClientSecret,
+                    label = { Text("CF-Access-Client-Secret") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
             Spacer(Modifier.height(12.dp))
 
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -171,6 +238,41 @@ fun BackupScreen(
                 }
             }
             Spacer(Modifier.height(20.dp))
+        }
+    }
+}
+
+@Composable
+private fun ComingSoonRow(name: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            Icons.Filled.Storage,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+            modifier = Modifier.size(20.dp)
+        )
+        Spacer(Modifier.width(14.dp))
+        Text(
+            name,
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+            modifier = Modifier.weight(1f)
+        )
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            shape = RoundedCornerShape(6.dp)
+        ) {
+            Text(
+                "Coming soon",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+            )
         }
     }
 }

@@ -47,6 +47,24 @@ fun DuplicateScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
 
+    // Defaults to the picker on every fresh entry to this screen - previously this always
+    // jumped straight to whatever the last scan's results were (hasScanned never resets, by
+    // design, so the scan can keep running in the background across navigation), with no way
+    // back to the picker short of leaving the screen entirely, which also meant there was no
+    // way to do anything else. If a scan happens to be actively running when this screen opens,
+    // show that instead, so you can watch progress or stop it.
+    var showingPicker by remember { mutableStateOf(!uiState.isScanning) }
+
+    androidx.activity.compose.BackHandler {
+        if (!showingPicker && !uiState.isScanning) {
+            // Viewing results (or empty-results) - back goes to the picker first, not straight
+            // out, so you can choose a different folder without leaving the screen.
+            showingPicker = true
+        } else {
+            onExit()
+        }
+    }
+
     val trashLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartIntentSenderForResult()
     ) { result ->
@@ -58,8 +76,17 @@ fun DuplicateScreen(
             TopAppBar(
                 title = { Text("Find duplicates") },
                 navigationIcon = {
-                    IconButton(onClick = onExit) {
+                    IconButton(onClick = {
+                        if (!showingPicker && !uiState.isScanning) showingPicker = true else onExit()
+                    }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
+                    }
+                },
+                actions = {
+                    if (!showingPicker && !uiState.isScanning) {
+                        TextButton(onClick = { showingPicker = true }) {
+                            Text("Choose folder")
+                        }
                     }
                 }
             )
@@ -73,8 +100,17 @@ fun DuplicateScreen(
                     scopeAlbum = uiState.scopeAlbum,
                     onStop = { viewModel.stopScan() }
                 )
-                !uiState.hasScanned -> FolderPickerState(
-                    onScan = { album -> viewModel.startScan(album) },
+                showingPicker -> FolderPickerState(
+                    onScan = { album ->
+                        // Picking the exact same folder the last completed scan already covered
+                        // shows those results directly instead of needlessly re-scanning.
+                        if (uiState.hasScanned && album == uiState.scopeAlbum) {
+                            showingPicker = false
+                        } else {
+                            viewModel.startScan(album)
+                            showingPicker = false
+                        }
+                    },
                     analyzedAlbums = viewModel.analyzedAlbums()
                 )
                 uiState.groups.isEmpty() -> EmptyResultState(

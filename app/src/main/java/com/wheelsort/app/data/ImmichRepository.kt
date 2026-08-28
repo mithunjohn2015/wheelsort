@@ -13,8 +13,15 @@ import java.io.IOException
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
-data class ImmichSettings(val serverUrl: String, val apiKey: String) {
+data class ImmichSettings(
+    val serverUrl: String,
+    val apiKey: String,
+    val cfAccessClientId: String = "",
+    val cfAccessClientSecret: String = ""
+) {
     val isConfigured: Boolean get() = serverUrl.isNotBlank() && apiKey.isNotBlank()
+    /** True only when BOTH Cloudflare fields are filled in - a half-filled pair isn't usable. */
+    val usesCloudflareAccess: Boolean get() = cfAccessClientId.isNotBlank() && cfAccessClientSecret.isNotBlank()
 }
 
 /** id -> whether that photo already exists on the Immich server. */
@@ -48,14 +55,28 @@ class ImmichRepository(context: Context) {
 
     fun loadSettings(): ImmichSettings = ImmichSettings(
         serverUrl = prefs.getString(KEY_URL, "") ?: "",
-        apiKey = prefs.getString(KEY_API_KEY, "") ?: ""
+        apiKey = prefs.getString(KEY_API_KEY, "") ?: "",
+        cfAccessClientId = prefs.getString(KEY_CF_CLIENT_ID, "") ?: "",
+        cfAccessClientSecret = prefs.getString(KEY_CF_CLIENT_SECRET, "") ?: ""
     )
 
-    fun saveSettings(serverUrl: String, apiKey: String) {
+    fun saveSettings(serverUrl: String, apiKey: String, cfAccessClientId: String = "", cfAccessClientSecret: String = "") {
         prefs.edit()
             .putString(KEY_URL, serverUrl.trim().trimEnd('/'))
             .putString(KEY_API_KEY, apiKey.trim())
+            .putString(KEY_CF_CLIENT_ID, cfAccessClientId.trim())
+            .putString(KEY_CF_CLIENT_SECRET, cfAccessClientSecret.trim())
             .apply()
+    }
+
+    /** Cloudflare Access checks these BEFORE the request ever reaches the origin server - if
+     *  present, they need to go on every single request, same as the Immich API key does. */
+    private fun Request.Builder.addCloudflareAccessHeaders(settings: ImmichSettings): Request.Builder {
+        if (settings.usesCloudflareAccess) {
+            addHeader("CF-Access-Client-Id", settings.cfAccessClientId)
+            addHeader("CF-Access-Client-Secret", settings.cfAccessClientSecret)
+        }
+        return this
     }
 
     private fun baseUrl(settings: ImmichSettings) = settings.serverUrl.trimEnd('/')
@@ -67,6 +88,7 @@ class ImmichRepository(context: Context) {
                 .url("${baseUrl(settings)}/api/users/me")
                 .addHeader("x-api-key", settings.apiKey)
                 .addHeader("Accept", "application/json")
+                .addCloudflareAccessHeaders(settings)
                 .get()
                 .build()
             client.newCall(request).execute().use { response ->
@@ -101,6 +123,7 @@ class ImmichRepository(context: Context) {
                 .url("${baseUrl(settings)}/api/assets/bulk-upload-check")
                 .addHeader("x-api-key", settings.apiKey)
                 .addHeader("Accept", "application/json")
+                .addCloudflareAccessHeaders(settings)
                 .post(body)
                 .build()
 
@@ -127,6 +150,8 @@ class ImmichRepository(context: Context) {
     private companion object {
         const val KEY_URL = "server_url"
         const val KEY_API_KEY = "api_key"
+        const val KEY_CF_CLIENT_ID = "cf_access_client_id"
+        const val KEY_CF_CLIENT_SECRET = "cf_access_client_secret"
     }
 }
 

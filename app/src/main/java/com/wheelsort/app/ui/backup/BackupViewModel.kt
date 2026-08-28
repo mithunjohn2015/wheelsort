@@ -20,6 +20,8 @@ enum class ConnectionStatus { UNKNOWN, TESTING, SUCCESS, FAILURE }
 data class BackupUiState(
     val serverUrl: String = "",
     val apiKey: String = "",
+    val cfAccessClientId: String = "",
+    val cfAccessClientSecret: String = "",
     val isConfigured: Boolean = false,
     val connectionStatus: ConnectionStatus = ConnectionStatus.UNKNOWN,
     val isChecking: Boolean = false,
@@ -45,6 +47,8 @@ class BackupViewModel(application: Application) : AndroidViewModel(application) 
         _uiState.value = _uiState.value.copy(
             serverUrl = settings.serverUrl,
             apiKey = settings.apiKey,
+            cfAccessClientId = settings.cfAccessClientId,
+            cfAccessClientSecret = settings.cfAccessClientSecret,
             isConfigured = settings.isConfigured
         )
     }
@@ -57,10 +61,20 @@ class BackupViewModel(application: Application) : AndroidViewModel(application) 
         _uiState.value = _uiState.value.copy(apiKey = key)
     }
 
+    fun updateCfAccessClientId(id: String) {
+        _uiState.value = _uiState.value.copy(cfAccessClientId = id)
+    }
+
+    fun updateCfAccessClientSecret(secret: String) {
+        _uiState.value = _uiState.value.copy(cfAccessClientSecret = secret)
+    }
+
     fun saveAndTestConnection() {
         val url = _uiState.value.serverUrl
         val key = _uiState.value.apiKey
-        immichRepository.saveSettings(url, key)
+        val cfId = _uiState.value.cfAccessClientId
+        val cfSecret = _uiState.value.cfAccessClientSecret
+        immichRepository.saveSettings(url, key, cfId, cfSecret)
         _uiState.value = _uiState.value.copy(
             connectionStatus = ConnectionStatus.TESTING,
             isConfigured = url.isNotBlank() && key.isNotBlank(),
