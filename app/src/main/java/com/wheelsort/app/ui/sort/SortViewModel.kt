@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.wheelsort.app.data.Photo
 import com.wheelsort.app.data.PhotoRepository
+import com.wheelsort.app.data.ReviewTracker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.asCoroutineDispatcher
